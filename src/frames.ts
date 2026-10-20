@@ -2,6 +2,8 @@
 export interface Frame {
   file: string
   time: number
+  /** Text on screen (OCR), when it ran and found some. */
+  text?: string
 }
 
 /**
@@ -36,4 +38,32 @@ export function framesAround(frames: Frame[], time: number, limit: number): Fram
     .sort((a, b) => Math.abs(a.time - time) - Math.abs(b.time - time))
     .slice(0, limit)
     .sort((a, b) => a.time - b.time)
+}
+
+export interface ScreenHit {
+  time: number
+  file: string
+  /** The OCR lines that contain the words. */
+  text: string
+}
+
+/** Frames whose on-screen text has every word of the query (accents and case aside), in time order. */
+export function searchScreen(frames: readonly Frame[], query: string, fold: (s: string) => string, limit = 10): ScreenHit[] {
+  const words = fold(query).split(/\s+/).filter((w) => w.length > 1)
+  if (words.length === 0) return []
+  const hits: ScreenHit[] = []
+  let lastText = ''
+  for (const frame of frames) {
+    if (!frame.text) continue
+    const folded = fold(frame.text)
+    if (!words.every((w) => folded.includes(w))) continue
+    const lines = frame.text.split('\n').filter((l) => words.some((w) => fold(l).includes(w)))
+    const text = lines.join('\n')
+    // The same screen across several frames: once is enough.
+    if (text === lastText) continue
+    lastText = text
+    hits.push({ time: frame.time, file: frame.file, text })
+    if (hits.length >= limit) break
+  }
+  return hits
 }

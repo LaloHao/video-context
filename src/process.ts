@@ -9,7 +9,9 @@ import { availableParallelism } from 'node:os'
 import { basename, extname, join, resolve } from 'node:path'
 
 import { ensureModel, findTools, homeDir, type ModelName, type Tools } from './deps.js'
+import { dhash, keepDistinct } from './dedupe.js'
 import { parseShowinfoTimes, selectExpression, type Frame } from './frames.js'
+import { findTesseract, mapLimit, ocrImage, ocrLanguages, tesseractLanguages } from './ocr.js'
 import { parseWhisperJson, toMarkdown, toSrt, type Segment } from './transcript.js'
 
 export interface ProcessOptions {
@@ -20,6 +22,10 @@ export interface ProcessOptions {
   sceneThreshold?: number
   /** At most this many seconds without a frame. Default 60. */
   frameEvery?: number
+  /** Drop a frame this close (dHash bits of 64) to the last kept one. Default 4; -1 keeps every frame. */
+  dedupeThreshold?: number
+  /** Read the text on screen of each frame with tesseract, when installed. Default true. */
+  ocr?: boolean
   /** Process again even when a result exists. */
   force?: boolean
   onProgress?(progress: Progress): void
@@ -27,7 +33,7 @@ export interface ProcessOptions {
 }
 
 export interface Progress {
-  stage: 'audio' | 'model' | 'transcribe' | 'frames' | 'done'
+  stage: 'audio' | 'model' | 'transcribe' | 'frames' | 'ocr' | 'done'
   /** 0–100 for the transcription. */
   percent?: number
   message: string
@@ -44,6 +50,10 @@ export interface Manifest {
   createdAt: string
   segments: number
   frames: Frame[]
+  /** Frames dropped as near-duplicates. */
+  droppedFrames?: number
+  /** How the on-screen text was read, or null when OCR did not run (and why). */
+  ocr?: { engine: 'tesseract'; languages: string[] } | { skipped: string } | null
 }
 
 export interface ProcessedVideo {
@@ -131,29 +141,66 @@ async function transcribe(tools: Tools, model: string, dir: string, language: st
   return parseWhisperJson(JSON.parse(readFileSync(join(dir, 'whisper.json'), 'utf8')))
 }
 
-async function extractFrames(tools: Tools, file: string, dir: string, opts: ProcessOptions): Promise<Frame[]> {
+/** Key frames: scene changes plus one every `frameEvery` s, near-duplicates dropped. One ffmpeg pass writes them and a 9×8 gray thumbnail of each. */
+async function extractFrames(tools: Tools, file: string, dir: string, opts: ProcessOptions): Promise<{ frames: Frame[]; dropped: number }> {
   const framesDir = join(dir, 'frames')
   rmSync(framesDir, { recursive: true, force: true })
   mkdirSync(framesDir, { recursive: true })
+  const thumbs = join(dir, 'thumbs.gray')
   let log = ''
   await run(
     tools.ffmpeg,
     [
-      '-hide_banner', '-nostats', '-i', file,
-      '-vf', `select='${selectExpression(opts.sceneThreshold ?? 0.25, opts.frameEvery ?? 60)}',showinfo,scale='min(1280,iw)':-2`,
-      '-fps_mode', 'vfr', '-q:v', '4', join(framesDir, '%05d.jpg')
+      '-hide_banner', '-nostats', '-y', '-i', file,
+      '-filter_complex',
+      `[0:v]select='${selectExpression(opts.sceneThreshold ?? 0.25, opts.frameEvery ?? 60)}',showinfo,split[full][tiny];` +
+        `[full]scale='min(1280,iw)':-2[big];[tiny]scale=9:8,format=gray[small]`,
+      '-map', '[big]', '-fps_mode', 'vfr', '-q:v', '4', join(framesDir, '%05d.jpg'),
+      '-map', '[small]', '-fps_mode', 'vfr', '-f', 'rawvideo', thumbs
     ],
     { signal: opts.signal, onStderr: (text) => (log += text) }
   )
   const times = parseShowinfoTimes(log)
   const files = readdirSync(framesDir).filter((f) => f.endsWith('.jpg')).sort()
-  // Named by their time, so a file says where it is in the video.
-  return files.map((name, i) => {
+  const raw = readFileSync(thumbs)
+  rmSync(thumbs, { force: true })
+  const hashes = files.map((_, i) => dhash(raw.subarray(i * 72, i * 72 + 72)))
+  const threshold = opts.dedupeThreshold ?? 4
+  const keep = new Set(threshold < 0 ? files.map((_, i) => i) : keepDistinct(hashes, threshold))
+  const frames: Frame[] = []
+  files.forEach((name, i) => {
+    if (!keep.has(i)) {
+      rmSync(join(framesDir, name), { force: true })
+      return
+    }
+    // Named by their time, so a file says where it is in the video.
     const time = times[i] ?? 0
     const target = `${String(Math.round(time)).padStart(5, '0')}s-${name}`
     renameSync(join(framesDir, name), join(framesDir, target))
-    return { file: join('frames', target), time }
+    frames.push({ file: join('frames', target), time })
   })
+  return { frames, dropped: files.length - frames.length }
+}
+
+/** The text on screen of each frame (in place), or why it did not run. */
+async function readScreens(dir: string, frames: Frame[], language: string, opts: ProcessOptions): Promise<Manifest['ocr']> {
+  if (opts.ocr === false) return { skipped: 'disabled' }
+  const bin = findTesseract()
+  if (!bin) return { skipped: 'tesseract is not installed' }
+  const languages = ocrLanguages(language === 'auto' ? undefined : language, tesseractLanguages(bin))
+  if (languages.length === 0) return { skipped: 'tesseract has no language data installed' }
+  let done = 0
+  await mapLimit(frames, 4, async (frame) => {
+    try {
+      const text = await ocrImage(bin, join(dir, frame.file), languages, opts.signal)
+      if (text) frame.text = text
+    } catch {
+      /* one unreadable frame does not stop the rest */
+    }
+    done++
+    opts.onProgress?.({ stage: 'ocr', percent: Math.round((done / frames.length) * 100), message: `Reading text on screen… ${done}/${frames.length}` })
+  })
+  return { engine: 'tesseract', languages }
 }
 
 /** Process `file` (or return the cached result). Throws with a readable message when a tool is missing or fails. */
@@ -182,7 +229,9 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
 
   // The frames are extracted while whisper transcribes: both take a while.
   opts.onProgress?.({ stage: 'transcribe', percent: 0, message: 'Transcribing…' })
-  const [segments, frames] = await Promise.all([transcribe(tools, model, dir, language, opts), extractFrames(tools, abs, dir, opts)])
+  // OCR follows the frames, still while whisper works.
+  const shots = extractFrames(tools, abs, dir, opts).then(async (r) => ({ ...r, ocr: await readScreens(dir, r.frames, language, opts) }))
+  const [segments, { frames, dropped, ocr }] = await Promise.all([transcribe(tools, model, dir, language, opts), shots])
   rmSync(join(dir, 'audio.wav'), { force: true })
 
   const title = basename(file, extname(file))
@@ -199,10 +248,16 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
     model: modelName,
     createdAt: new Date().toISOString(),
     segments: segments.length,
-    frames
+    frames,
+    droppedFrames: dropped,
+    ocr
   }
   // Last: a folder with a manifest is a finished one.
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2))
-  opts.onProgress?.({ stage: 'done', message: `Done: ${segments.length} transcript segments, ${frames.length} frames.` })
+  const withText = frames.filter((f) => f.text).length
+  opts.onProgress?.({
+    stage: 'done',
+    message: `Done: ${segments.length} transcript segments, ${frames.length} frames (${dropped} near-duplicates dropped${ocr && 'engine' in ocr ? `, text read on ${withText}` : ''}).`
+  })
   return { dir, manifest }
 }

@@ -9,9 +9,13 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { findTools } from '../src/deps.js'
+import { findTesseract } from '../src/ocr.js'
 
 const model = process.env.VIDEO_CONTEXT_MODEL
 const ready = !('missing' in findTools()) && Boolean(model && existsSync(model)) && existsSync('dist/mcp.js')
+/** A font for drawtext and tesseract: then the second scene carries text to read. */
+const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'
+const ocr = existsSync(FONT) && findTesseract() !== null
 
 describe.skipIf(!ready)('end to end', () => {
   let home: string
@@ -23,10 +27,12 @@ describe.skipIf(!ready)('end to end', () => {
     // Two scenes (a color change at 4 s) and a tone: enough for frames and a (near empty) transcript.
     execFileSync('ffmpeg', [
       '-v', 'error', '-y',
-      '-f', 'lavfi', '-i', 'color=c=red:s=320x240:d=4',
-      '-f', 'lavfi', '-i', 'color=c=blue:s=320x240:d=4',
+      '-f', 'lavfi', '-i', ocr
+        ? `color=c=blue:s=640x240:d=4,drawtext=fontfile=${FONT}:text='POST /api/v1/referencias/CreaReferencia':fontsize=22:fontcolor=white:x=20:y=100`
+        : 'color=c=blue:s=640x240:d=4',
+      '-f', 'lavfi', '-i', 'color=c=red:s=640x240:d=4',
       '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8',
-      '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[v]',
+      '-filter_complex', '[1:v][0:v]concat=n=2:v=1:a=0[v]',
       '-map', '[v]', '-map', '2:a', '-shortest', video
     ])
   })
@@ -75,6 +81,10 @@ describe.skipIf(!ready)('end to end', () => {
       const images = frames.result!.content.filter((c) => c.type === 'image')
       // The first frame and the scene change at 4 s.
       expect(images.length).toBeGreaterThanOrEqual(2)
+      if (ocr) {
+        const found = await call('tools/call', { name: 'search_transcript', arguments: { videoId: id, query: 'CreaReferencia' } })
+        expect(found.result!.content[0].text).toMatch(/On screen:\n\[0:0[45]\] .*CreaReferencia/)
+      }
     } finally {
       child.kill()
     }

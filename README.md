@@ -4,6 +4,9 @@ Turn a video into context an AI agent can use. Everything runs on your machine:
 
 - a **timestamped transcript** with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
 - **key frames** at scene changes (and at least one a minute) with [ffmpeg](https://ffmpeg.org),
+  near-duplicates dropped (a still screen is kept once),
+- the **text on screen** of each frame with [tesseract](https://github.com/tesseract-ocr/tesseract)
+  (optional): URLs, code and field names that are shown but never said,
 - an **MCP server** so an agent (Claude Code, or any MCP client) can process a video,
   read the transcript by time range, search it, and look at the frames as images.
 
@@ -16,6 +19,8 @@ can study: *"watch this video and tell me how to do the task"*.
 - `ffmpeg` and `ffprobe` on your PATH (`sudo apt install ffmpeg`, `brew install ffmpeg`)
 - whisper.cpp's `whisper-cli` on your PATH (`brew install whisper-cpp`, or build it from
   the repository)
+- optional, for the text on screen: `tesseract` (`sudo apt install tesseract-ocr`, plus e.g.
+  `tesseract-ocr-spa` for Spanish; `brew install tesseract tesseract-lang`)
 
 The whisper model is downloaded the first time (about 465 MB for `small`) into
 `~/.cache/video-context/models`.
@@ -37,7 +42,8 @@ Results: `transcript.md` (paragraphs with their time), `transcript.srt`,
 `transcript.json`, `frames/` (files named by their second) and `manifest.json`.
 
 Options: `--language <code>` (default auto), `--model tiny|base|small|medium|large-v3-turbo|large-v3`
-(default `small`), `--out <dir>` to copy the results, `--force` to process again.
+(default `small`), `--out <dir>` to copy the results, `--no-ocr`, `--keep-duplicates`,
+`--force` to process again.
 
 ## MCP server
 
@@ -59,8 +65,8 @@ or to any MCP client config:
 | `video_status` | Progress, or where the results are once ready. |
 | `list_videos` | Videos already processed. |
 | `get_transcript` | The transcript as `[m:ss] text` lines, optionally a time range. |
-| `search_transcript` | Where something is said: matching passages with their time (accents and case aside). |
-| `get_frames` | Key frames as images: around a time, or spread over a range. |
+| `search_transcript` | Where something is said or shown: transcript passages and on-screen text, with their time (accents and case aside). |
+| `get_frames` | Key frames as images, with their on-screen text: around a time, or spread over a range. |
 | `list_frames` | The time of every key frame. |
 
 Then ask, for example: *"Process ~/Downloads/training.mp4 (Spanish) and write the
@@ -72,7 +78,7 @@ steps it explains for configuring payments, with the minute of each step."*
 | --- | --- |
 | `VIDEO_CONTEXT_HOME` | `~/.cache/video-context` |
 | `VIDEO_CONTEXT_MODEL` | a ggml model file to use instead of downloading one |
-| `VIDEO_CONTEXT_WHISPER` / `VIDEO_CONTEXT_FFMPEG` / `VIDEO_CONTEXT_FFPROBE` | the binaries, when they are not on PATH |
+| `VIDEO_CONTEXT_WHISPER` / `VIDEO_CONTEXT_FFMPEG` / `VIDEO_CONTEXT_FFPROBE` / `VIDEO_CONTEXT_TESSERACT` | the binaries, when they are not on PATH |
 
 ## Privacy
 

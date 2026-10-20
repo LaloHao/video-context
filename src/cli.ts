@@ -17,6 +17,8 @@ Options:
   -l, --language <code>  Spoken language, e.g. es, en (default: auto)
   -m, --model <name>     Whisper model: ${MODELS.join(', ')} (default: small)
   -o, --out <dir>        Also copy the results to this folder
+      --no-ocr           Do not read the text on screen (OCR needs tesseract)
+      --keep-duplicates  Keep near-identical frames
       --force            Process again even if it was processed before
   -h, --help             Show this help
 
@@ -30,6 +32,8 @@ const { values, positionals } = parseArgs({
     model: { type: 'string', short: 'm' },
     out: { type: 'string', short: 'o' },
     force: { type: 'boolean' },
+    'no-ocr': { type: 'boolean' },
+    'keep-duplicates': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }
   }
 })
@@ -50,6 +54,8 @@ try {
     language: values.language,
     model: values.model as ModelName | undefined,
     force: values.force,
+    ocr: !values['no-ocr'],
+    dedupeThreshold: values['keep-duplicates'] ? -1 : undefined,
     onProgress: (p) => {
       if (p.message === last) return
       last = p.message
@@ -65,6 +71,8 @@ try {
   console.log(`Transcript: ${join(target, 'transcript.md')}`)
   console.log(`Frames:     ${join(target, 'frames')}`)
   console.log(`Video id:   ${manifest.id}`)
+  if (manifest.droppedFrames) console.log(`Dropped ${manifest.droppedFrames} near-duplicate frames.`)
+  if (manifest.ocr && 'skipped' in manifest.ocr) console.log(`Text on screen not read: ${manifest.ocr.skipped}.`)
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))
   process.exit(existsSync(file) ? 2 : 1)

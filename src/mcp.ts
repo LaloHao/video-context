@@ -11,10 +11,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 
 import { MODELS, type ModelName } from './deps.js'
-import { framesAround, framesBetween } from './frames.js'
+import { framesAround, framesBetween, searchScreen } from './frames.js'
 import { listVideos, loadVideo, processVideo, videoId, type Progress } from './process.js'
 import { formatTime, parseTime } from './time.js'
-import { rangeText, searchSegments } from './transcript.js'
+import { fold, rangeText, searchSegments } from './transcript.js'
 
 const MAX_TRANSCRIPT_CHARS = 40_000
 const MAX_FRAMES = 8
@@ -33,8 +33,12 @@ function summary(id: string): string {
   const video = loadVideo(id)
   if (!video) return ''
   const m = video.manifest
+  const screen =
+    m.ocr && 'engine' in m.ocr
+      ? ` Text on screen was read (OCR) on ${m.frames.filter((f) => f.text).length} of them, and search_transcript searches it too.`
+      : ''
   return [
-    `Video ${m.id} is ready: "${m.title}", ${formatTime(m.duration)} long, ${m.segments} transcript segments, ${m.frames.length} key frames.`,
+    `Video ${m.id} is ready: "${m.title}", ${formatTime(m.duration)} long, ${m.segments} transcript segments, ${m.frames.length} key frames.${screen}`,
     `Transcript (Markdown, with times): ${join(video.dir, 'transcript.md')}`,
     'Read it with get_transcript (by time range), find topics with search_transcript, and look at the screen with get_frames.'
   ].join('\n')
@@ -129,7 +133,8 @@ server.registerTool(
 server.registerTool(
   'search_transcript',
   {
-    description: 'Find where something is said in a processed video: segments containing all the words (accents and case aside), with their time and the text around them.',
+    description:
+      'Find something in a processed video: where it is said (transcript segments with all the words, accents and case aside, with the text around them) and where it is shown on screen (text read from the key frames: URLs, code, field names). Each hit has its time; look at a screen hit with get_frames at that time.',
     inputSchema: {
       videoId: z.string(),
       query: z.string(),
@@ -139,9 +144,13 @@ server.registerTool(
   async ({ videoId: id, query, limit }) => {
     const video = loadVideo(id)
     if (!video) return fail(`Video ${id} is not processed (yet).`)
-    const hits = searchSegments(video.segments, query, limit ?? 10)
-    if (hits.length === 0) return text(`"${query}" is not found in the transcript. Try other words or a synonym.`)
-    return text(hits.map((h) => `[${formatTime(h.start)}–${formatTime(h.end)}] ${h.text}`).join('\n\n'))
+    const said = searchSegments(video.segments, query, limit ?? 10)
+    const shown = searchScreen(video.manifest.frames, query, fold, limit ?? 10)
+    if (said.length === 0 && shown.length === 0) return text(`"${query}" is not found in the transcript or on screen. Try other words or a synonym.`)
+    const parts: string[] = []
+    if (said.length > 0) parts.push(`Said:\n${said.map((h) => `[${formatTime(h.start)}–${formatTime(h.end)}] ${h.text}`).join('\n\n')}`)
+    if (shown.length > 0) parts.push(`On screen:\n${shown.map((h) => `[${formatTime(h.time)}] ${h.text}`).join('\n\n')}`)
+    return text(parts.join('\n\n'))
   }
 )
 
@@ -169,7 +178,8 @@ server.registerTool(
     if (frames.length === 0) return text('No key frame in that range.')
     const content: Content[] = []
     for (const frame of frames) {
-      content.push({ type: 'text', text: `Frame at ${formatTime(frame.time)}:` })
+      const onScreen = frame.text ? `\nText on screen (OCR, may have errors):\n${frame.text.slice(0, 1500)}` : ''
+      content.push({ type: 'text', text: `Frame at ${formatTime(frame.time)}:${onScreen}` })
       content.push({ type: 'image', mimeType: 'image/jpeg', data: readFileSync(join(video.dir, frame.file)).toString('base64') })
     }
     return { content }
