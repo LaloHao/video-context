@@ -2,7 +2,25 @@
   "name": "video-context",
   "version": "0.1.0",
   "description": "Turn a video into context an AI agent can use: a local timestamped transcript (whisper.cpp), key frames (ffmpeg) and an MCP server to search and read them.",
+  "keywords": [
+    "mcp",
+    "video",
+    "transcript",
+    "whisper",
+    "ffmpeg",
+    "claude",
+    "agents"
+  ],
   "license": "MIT",
+  "author": "Eduardo V.",
+  "homepage": "https://github.com/LaloHao/video-context#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LaloHao/video-context.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LaloHao/video-context/issues"
+  },
   "type": "module",
   "bin": {
     "video-context": "dist/cli.js",
@@ -23,15 +41,6 @@
     "check": "pnpm typecheck && pnpm test",
     "prepare": "pnpm build"
   },
-  "keywords": [
-    "mcp",
-    "video",
-    "transcript",
-    "whisper",
-    "ffmpeg",
-    "claude",
-    "agents"
-  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
     "zod": "^4.6.7"
