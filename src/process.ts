@@ -1,0 +1,208 @@
+// Processing one video: audio → whisper.cpp transcript, and key frames, into a
+// cache folder per video. Idempotent: a video already processed (same path,
+// size and modification time) is not processed again unless forced.
+
+import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
+import { basename, extname, join, resolve } from 'node:path'
+
+import { ensureModel, findTools, homeDir, type ModelName, type Tools } from './deps.js'
+import { parseShowinfoTimes, selectExpression, type Frame } from './frames.js'
+import { parseWhisperJson, toMarkdown, toSrt, type Segment } from './transcript.js'
+
+export interface ProcessOptions {
+  /** Spoken language (`es`, `en`…) or `auto`. Default `auto`. */
+  language?: string
+  model?: ModelName
+  /** Scene change (0–1) that takes a frame. Default 0.25. */
+  sceneThreshold?: number
+  /** At most this many seconds without a frame. Default 60. */
+  frameEvery?: number
+  /** Process again even when a result exists. */
+  force?: boolean
+  onProgress?(progress: Progress): void
+  signal?: AbortSignal
+}
+
+export interface Progress {
+  stage: 'audio' | 'model' | 'transcribe' | 'frames' | 'done'
+  /** 0–100 for the transcription. */
+  percent?: number
+  message: string
+}
+
+export interface Manifest {
+  version: 1
+  id: string
+  source: string
+  title: string
+  duration: number
+  language: string
+  model: string
+  createdAt: string
+  segments: number
+  frames: Frame[]
+}
+
+export interface ProcessedVideo {
+  dir: string
+  manifest: Manifest
+}
+
+/** Stable id of a video file: its absolute path, size and modification time. */
+export function videoId(path: string): string {
+  const abs = resolve(path)
+  const stat = statSync(abs)
+  return createHash('sha1').update(`${abs}\0${stat.size}\0${stat.mtimeMs}`).digest('hex').slice(0, 16)
+}
+
+export function videoDir(id: string): string {
+  return join(homeDir(), 'videos', id)
+}
+
+/** A processed video, or null if it was not processed (or the id is not one). */
+export function loadVideo(id: string): { dir: string; manifest: Manifest; segments: Segment[] } | null {
+  if (!/^[0-9a-f]{16}$/.test(id)) return null
+  const dir = videoDir(id)
+  try {
+    const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as Manifest
+    const segments = JSON.parse(readFileSync(join(dir, 'transcript.json'), 'utf8')) as Segment[]
+    return { dir, manifest, segments }
+  } catch {
+    return null
+  }
+}
+
+/** Every processed video, newest first. */
+export function listVideos(): Manifest[] {
+  const root = join(homeDir(), 'videos')
+  if (!existsSync(root)) return []
+  return readdirSync(root)
+    .map((id) => loadVideo(id)?.manifest)
+    .filter((m): m is Manifest => Boolean(m))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+function run(
+  command: string,
+  args: string[],
+  opts: { cwd?: string; signal?: AbortSignal; onStderr?: (chunk: string) => void } = {}
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'], signal: opts.signal })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString()))
+    child.stderr.on('data', (d: Buffer) => {
+      const text = d.toString()
+      // The log can be large (a line per frame): only the tail is kept for errors, the callback sees it all.
+      stderr = (stderr + text).slice(-20_000)
+      opts.onStderr?.(text)
+    })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolvePromise({ stdout, stderr })
+      else reject(new Error(`${basename(command)} failed (exit ${code}): ${stderr.trim().split('\n').slice(-3).join(' ')}`))
+    })
+  })
+}
+
+async function duration(tools: Tools, file: string, signal?: AbortSignal): Promise<number> {
+  const { stdout } = await run(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], { signal })
+  const seconds = Number(stdout.trim())
+  if (!Number.isFinite(seconds)) throw new Error('Could not read the video duration: is it a video file?')
+  return seconds
+}
+
+async function transcribe(tools: Tools, model: string, dir: string, language: string, opts: ProcessOptions): Promise<Segment[]> {
+  const threads = String(Math.max(1, Math.min(16, availableParallelism() - 2)))
+  await run(tools.whisper, ['-m', model, '-l', language, '-t', threads, '-f', 'audio.wav', '-oj', '-of', 'whisper', '-pp'], {
+    cwd: dir,
+    signal: opts.signal,
+    onStderr: (text) => {
+      for (const match of text.matchAll(/progress\s*=\s*(\d+)%/g)) {
+        const percent = Number(match[1])
+        opts.onProgress?.({ stage: 'transcribe', percent, message: `Transcribing… ${percent}%` })
+      }
+    }
+  })
+  return parseWhisperJson(JSON.parse(readFileSync(join(dir, 'whisper.json'), 'utf8')))
+}
+
+async function extractFrames(tools: Tools, file: string, dir: string, opts: ProcessOptions): Promise<Frame[]> {
+  const framesDir = join(dir, 'frames')
+  rmSync(framesDir, { recursive: true, force: true })
+  mkdirSync(framesDir, { recursive: true })
+  let log = ''
+  await run(
+    tools.ffmpeg,
+    [
+      '-hide_banner', '-nostats', '-i', file,
+      '-vf', `select='${selectExpression(opts.sceneThreshold ?? 0.25, opts.frameEvery ?? 60)}',showinfo,scale='min(1280,iw)':-2`,
+      '-fps_mode', 'vfr', '-q:v', '4', join(framesDir, '%05d.jpg')
+    ],
+    { signal: opts.signal, onStderr: (text) => (log += text) }
+  )
+  const times = parseShowinfoTimes(log)
+  const files = readdirSync(framesDir).filter((f) => f.endsWith('.jpg')).sort()
+  // Named by their time, so a file says where it is in the video.
+  return files.map((name, i) => {
+    const time = times[i] ?? 0
+    const target = `${String(Math.round(time)).padStart(5, '0')}s-${name}`
+    renameSync(join(framesDir, name), join(framesDir, target))
+    return { file: join('frames', target), time }
+  })
+}
+
+/** Process `file` (or return the cached result). Throws with a readable message when a tool is missing or fails. */
+export async function processVideo(file: string, opts: ProcessOptions = {}): Promise<ProcessedVideo> {
+  if (!existsSync(file)) throw new Error(`${file} does not exist.`)
+  const id = videoId(file)
+  const dir = videoDir(id)
+  if (!opts.force) {
+    const cached = loadVideo(id)
+    if (cached) return { dir, manifest: cached.manifest }
+  }
+  const tools = findTools()
+  if ('missing' in tools) throw new Error(tools.missing)
+  mkdirSync(dir, { recursive: true })
+  rmSync(join(dir, 'manifest.json'), { force: true })
+  const abs = resolve(file)
+  const seconds = await duration(tools, abs, opts.signal)
+  const language = opts.language ?? 'auto'
+  const modelName = opts.model ?? 'small'
+
+  opts.onProgress?.({ stage: 'model', message: `Whisper model "${modelName}"` })
+  const model = await ensureModel(modelName, (message) => opts.onProgress?.({ stage: 'model', message }))
+
+  opts.onProgress?.({ stage: 'audio', message: 'Extracting the audio…' })
+  await run(tools.ffmpeg, ['-v', 'error', '-y', '-i', abs, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', join(dir, 'audio.wav')], { signal: opts.signal })
+
+  // The frames are extracted while whisper transcribes: both take a while.
+  opts.onProgress?.({ stage: 'transcribe', percent: 0, message: 'Transcribing…' })
+  const [segments, frames] = await Promise.all([transcribe(tools, model, dir, language, opts), extractFrames(tools, abs, dir, opts)])
+  rmSync(join(dir, 'audio.wav'), { force: true })
+
+  const title = basename(file, extname(file))
+  writeFileSync(join(dir, 'transcript.json'), JSON.stringify(segments))
+  writeFileSync(join(dir, 'transcript.md'), toMarkdown(segments, title))
+  writeFileSync(join(dir, 'transcript.srt'), toSrt(segments))
+  const manifest: Manifest = {
+    version: 1,
+    id,
+    source: abs,
+    title,
+    duration: seconds,
+    language,
+    model: modelName,
+    createdAt: new Date().toISOString(),
+    segments: segments.length,
+    frames
+  }
+  // Last: a folder with a manifest is a finished one.
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+  opts.onProgress?.({ stage: 'done', message: `Done: ${segments.length} transcript segments, ${frames.length} frames.` })
+  return { dir, manifest }
+}
