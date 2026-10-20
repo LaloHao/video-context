@@ -23,10 +23,10 @@ results does the understanding.
 sudo apt install ffmpeg tesseract-ocr        # and whisper.cpp's whisper-cli, see below
 
 # 2. Process a video
-npx video-context ./meeting.mp4 --language en
+npx -p @lalohao/video-context video-context ./meeting.mp4 --language en
 
 # 3. Or let your agent do it
-claude mcp add video-context -- npx -y -p video-context video-context-mcp
+claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp
 ```
 
 ```
@@ -86,7 +86,7 @@ modification time.
 | `get_frames` | Key frames as images with their on-screen text: around a time or over a range. |
 | `list_frames` | The time of every key frame. |
 
-Claude Code: `claude mcp add video-context -- npx -y -p video-context video-context-mcp`.
+Claude Code: `claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp`.
 Other clients and example prompts: [docs/mcp.md](docs/mcp.md).
 
 ## Environment variables

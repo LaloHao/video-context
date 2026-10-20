@@ -17,7 +17,7 @@ It is a good test because much of what matters is **on screen and never said**: 
 curl -L -o Basic_Introduction_to_HTML.webm \
   https://upload.wikimedia.org/wikipedia/commons/5/58/Basic_Introduction_to_HTML.webm
 
-npx video-context Basic_Introduction_to_HTML.webm --language en
+npx -p @lalohao/video-context video-context Basic_Introduction_to_HTML.webm --language en
 ```
 
 ```
@@ -86,7 +86,7 @@ character). It is good enough to *find* the moment; the agent then reads the ima
 ## 5. Asking an agent
 
 With the MCP server added to Claude Code
-(`claude mcp add video-context -- npx -y -p video-context video-context-mcp`):
+(`claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp`):
 
 > Process ~/Downloads/Basic_Introduction_to_HTML.webm (English). Write the final HTML file the
 > author builds, as it appears on screen at the end, and list the concepts he explains with the

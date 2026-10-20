@@ -29,7 +29,7 @@ calls them in this order:
 ## Claude Code
 
 ```bash
-claude mcp add video-context -- npx -y -p video-context video-context-mcp
+claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp
 ```
 
 Prompts that work well:
@@ -48,7 +48,7 @@ Any MCP client that runs stdio servers can use it:
 ```json
 {
   "mcpServers": {
-    "video-context": { "command": "npx", "args": ["-y", "-p", "video-context", "video-context-mcp"] }
+    "video-context": { "command": "npx", "args": ["-y", "-p", "@lalohao/video-context", "video-context-mcp"] }
   }
 }
 ```
