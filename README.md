@@ -81,13 +81,38 @@ modification time.
 | `process_video` | Starts processing a local file in the background and returns its id. |
 | `video_status` | Progress, or a summary and where the results are once ready. |
 | `list_videos` | Videos already processed. |
-| `get_transcript` | The transcript as `[m:ss] text` lines, optionally a time range. |
+| `get_transcript` | The transcript as `[m:ss] text` lines (`[m:ss] Name: text` with speakers), optionally a time range. |
 | `search_transcript` | Where something is said or shown on screen, with times (accents and case aside). |
 | `get_frames` | Key frames as images with their on-screen text: around a time or over a range. |
 | `list_frames` | The time of every key frame. |
 
 Claude Code: `claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp`.
 Other clients and example prompts: [docs/mcp.md](docs/mcp.md).
+
+## Who said what
+
+A recorder can leave a `.json` file with the same name next to the video (`daily.webm` +
+`daily.json`). When it says who was speaking when, every line of the transcript carries the
+speaker's name, and `search_transcript` finds a name together with the words
+(*"Ana pagos"*). Its title replaces the file name.
+
+```json
+{
+  "schema": "video-context-recording/1",
+  "title": "Daily",
+  "recordingStartedAt": "2026-10-22T16:00:00.000Z",
+  "speakers": [
+    { "name": "Ana", "start": 12.4, "end": 18.9, "source": "captions" },
+    { "name": "Carlos", "start": 19.1, "end": 31.0, "source": "captions" }
+  ]
+}
+```
+
+Times are seconds from the start of the video. Each transcript segment gets the speaker whose
+turns overlap it the most (or the nearest turn within 2 s). `source` is `captions` (the
+meeting's live captions) or `indicator` (a participant tile's audio-level animation, less
+reliable: used only when there are no caption turns). A video processed before its `.json`
+existed needs `--force`.
 
 ## Environment variables
 

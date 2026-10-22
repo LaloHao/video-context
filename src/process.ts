@@ -12,6 +12,7 @@ import { ensureModel, findTools, homeDir, type ModelName, type Tools } from './d
 import { dhash, keepDistinct } from './dedupe.js'
 import { parseShowinfoTimes, selectExpression, type Frame } from './frames.js'
 import { findTesseract, mapLimit, ocrImage, ocrLanguages, tesseractLanguages } from './ocr.js'
+import { assignSpeakers, readRecording, speakerNames } from './recording.js'
 import { parseWhisperJson, toMarkdown, toSrt, type Segment } from './transcript.js'
 
 export interface ProcessOptions {
@@ -54,6 +55,8 @@ export interface Manifest {
   droppedFrames?: number
   /** How the on-screen text was read, or null when OCR did not run (and why). */
   ocr?: { engine: 'tesseract'; languages: string[] } | { skipped: string } | null
+  /** From the recording file next to the video (`<name>.json`), when there is one. */
+  recording?: { url?: string; startedAt?: string; speakers: string[] }
 }
 
 export interface ProcessedVideo {
@@ -121,9 +124,22 @@ function run(
 
 async function duration(tools: Tools, file: string, signal?: AbortSignal): Promise<number> {
   const { stdout } = await run(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], { signal })
-  const seconds = Number(stdout.trim())
+  let seconds = Number(stdout.trim())
+  if (!Number.isFinite(seconds)) {
+    // WebM files from a browser's MediaRecorder have no duration in their header:
+    // read the packets through without decoding and take the last time reached.
+    const { stderr } = await run(tools.ffmpeg, ['-hide_banner', '-i', file, '-map', '0', '-c', 'copy', '-f', 'null', '-'], { signal })
+    seconds = lastProgressTime(stderr) ?? Number.NaN
+  }
   if (!Number.isFinite(seconds)) throw new Error('Could not read the video duration: is it a video file?')
   return seconds
+}
+
+/** The last `time=hh:mm:ss.xx` of an ffmpeg progress log, in seconds. */
+export function lastProgressTime(log: string): number | null {
+  const times = [...log.matchAll(/time=(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/g)]
+  const last = times.at(-1)
+  return last ? Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]) : null
 }
 
 async function transcribe(tools: Tools, model: string, dir: string, language: string, opts: ProcessOptions): Promise<Segment[]> {
@@ -231,10 +247,13 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
   opts.onProgress?.({ stage: 'transcribe', percent: 0, message: 'Transcribing…' })
   // OCR follows the frames, still while whisper works.
   const shots = extractFrames(tools, abs, dir, opts).then(async (r) => ({ ...r, ocr: await readScreens(dir, r.frames, language, opts) }))
-  const [segments, { frames, dropped, ocr }] = await Promise.all([transcribe(tools, model, dir, language, opts), shots])
+  const [whisperSegments, { frames, dropped, ocr }] = await Promise.all([transcribe(tools, model, dir, language, opts), shots])
   rmSync(join(dir, 'audio.wav'), { force: true })
 
-  const title = basename(file, extname(file))
+  // A recorder's metadata next to the video names the meeting and who spoke when.
+  const recording = readRecording(abs)
+  const segments = recording ? assignSpeakers(whisperSegments, recording.speakers) : whisperSegments
+  const title = recording?.title ?? basename(file, extname(file))
   writeFileSync(join(dir, 'transcript.json'), JSON.stringify(segments))
   writeFileSync(join(dir, 'transcript.md'), toMarkdown(segments, title))
   writeFileSync(join(dir, 'transcript.srt'), toSrt(segments))
@@ -250,7 +269,10 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
     segments: segments.length,
     frames,
     droppedFrames: dropped,
-    ocr
+    ocr,
+    ...(recording && {
+      recording: { url: recording.url, startedAt: recording.recordingStartedAt, speakers: speakerNames(segments) }
+    })
   }
   // Last: a folder with a manifest is a finished one.
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2))

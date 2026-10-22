@@ -37,8 +37,11 @@ function summary(id: string): string {
     m.ocr && 'engine' in m.ocr
       ? ` Text on screen was read (OCR) on ${m.frames.filter((f) => f.text).length} of them, and search_transcript searches it too.`
       : ''
+  const speakers = m.recording?.speakers.length
+    ? ` The transcript says who spoke (${m.recording.speakers.join(', ')}); search_transcript also finds a speaker's name.`
+    : ''
   return [
-    `Video ${m.id} is ready: "${m.title}", ${formatTime(m.duration)} long, ${m.segments} transcript segments, ${m.frames.length} key frames.${screen}`,
+    `Video ${m.id} is ready: "${m.title}", ${formatTime(m.duration)} long, ${m.segments} transcript segments, ${m.frames.length} key frames.${screen}${speakers}`,
     `Transcript (Markdown, with times): ${join(video.dir, 'transcript.md')}`,
     'Read it with get_transcript (by time range), find topics with search_transcript, and look at the screen with get_frames.'
   ].join('\n')

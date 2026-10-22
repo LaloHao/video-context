@@ -23,6 +23,10 @@ video.mp4 ──ffprobe──▶ duration
    of the file's absolute path, size and modification time: the same file is processed once.
    `manifest.json` is written last, so a folder with a manifest is a finished one.
 
+6. **Speakers.** When a recording file (`<name>.json`, see the README) sits next to the
+   video, each transcript segment is labelled with the speaker whose turns overlap it the
+   most, and the Markdown starts a new paragraph at every change of speaker.
+
 Whisper and the frames/OCR run in parallel; for an hour of video on a modern CPU, expect
 a few minutes with the `small` model.
 
@@ -32,9 +36,9 @@ a few minutes with the `small` model.
 | --- | --- |
 | `transcript.md` | The transcript in paragraphs of about 45 s, each starting with its time — for reading. |
 | `transcript.srt` | Subtitles. |
-| `transcript.json` | `[{ "start": 12.4, "end": 15.1, "text": "…" }]` — seconds. |
+| `transcript.json` | `[{ "start": 12.4, "end": 15.1, "text": "…", "speaker": "Ana" }]` — seconds; `speaker` only with a recording file. |
 | `frames/*.jpg` | The key frames, named by their second. |
-| `manifest.json` | Title, duration, language, model, frames (`file`, `time`, `text`), dropped duplicates, OCR info. |
+| `manifest.json` | Title, duration, language, model, frames (`file`, `time`, `text`), dropped duplicates, OCR info, and `recording` (URL, start time, speakers) when there is a recording file. |
 
 ## Choosing a model
 
