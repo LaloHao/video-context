@@ -5,7 +5,9 @@
 A recorded meeting, a training session or a screencast becomes something an agent can
 study: *"watch this video and tell me how to do the task"*.
 
-- **Timestamped transcript** with [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
+- **Timestamped transcript** with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), or
+  [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) on the GPU of
+  Apple silicon Macs.
 - **Key frames** at every scene change (and at least one a minute) with
   [ffmpeg](https://ffmpeg.org); near-identical frames are dropped.
 - **Text on screen** of each frame with [tesseract](https://github.com/tesseract-ocr/tesseract)
@@ -18,14 +20,27 @@ results does the understanding.
 
 ## Quick start
 
+**1. Install the tools** — ffmpeg and a whisper engine (tesseract is optional):
+
+| System | Command |
+| --- | --- |
+| macOS, Apple silicon | `brew install ffmpeg tesseract uv && uv tool install mlx-whisper` |
+| macOS, Intel | `brew install ffmpeg tesseract whisper-cpp` |
+| Debian / Ubuntu | `sudo apt install ffmpeg tesseract-ocr`, then [build whisper.cpp](docs/install.md#linux) |
+| Windows | `winget install Gyan.FFmpeg`, then [whisper.cpp's release zip](docs/install.md#windows) |
+
+Other systems, GPUs and troubleshooting: **[docs/install.md](docs/install.md)**.
+
+**2. Check the setup**
+
 ```bash
-# 1. Requirements (macOS: brew install ffmpeg whisper-cpp tesseract)
-sudo apt install ffmpeg tesseract-ocr        # and whisper.cpp's whisper-cli, see below
+npx -p @lalohao/video-context video-context --doctor
+```
 
-# 2. Process a video
+**3. Process a video**, or let your agent do it:
+
+```bash
 npx -p @lalohao/video-context video-context ./meeting.mp4 --language en
-
-# 3. Or let your agent do it
 claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp
 ```
 
@@ -51,23 +66,28 @@ See [examples/](examples/) for a full walkthrough on a public video, and the doc
 | --- | --- | --- |
 | Node.js 20+ | everything | [nodejs.org](https://nodejs.org) |
 | `ffmpeg`, `ffprobe` | audio and frames | `apt install ffmpeg` · `brew install ffmpeg` |
-| `whisper-cli` (whisper.cpp) | the transcript | `brew install whisper-cpp`, or [build it](https://github.com/ggml-org/whisper.cpp#quick-start) and put `build/bin/whisper-cli` on your PATH |
+| `whisper-cli` (whisper.cpp) **or** `mlx_whisper` | the transcript | `brew install whisper-cpp`, or [build it](docs/install.md#linux) · `uv tool install mlx-whisper` (Apple silicon) |
 | `tesseract` | text on screen (optional) | `apt install tesseract-ocr tesseract-ocr-spa` · `brew install tesseract tesseract-lang` |
 
-The whisper model is downloaded on first use (465 MB for `small`) into
-`~/.cache/video-context/models`. Without `tesseract`, everything works except the text on screen.
+When both engines are installed, mlx-whisper is used (`--engine` picks one). The whisper
+model is downloaded on first use (465 MB for `small`): into `~/.cache/video-context/models`
+for whisper.cpp, into the Hugging Face cache for mlx-whisper. Without `tesseract`, everything
+works except the text on screen. Step-by-step for each system: [docs/install.md](docs/install.md).
 
 ## Command line
 
 ```
 video-context <video> [options]
+video-context --doctor
 
   -l, --language <code>  Spoken language, e.g. en, es (default: auto)
   -m, --model <name>     tiny, base, small, medium, large-v3-turbo, large-v3 (default: small)
+  -e, --engine <name>    whisper.cpp or mlx (default: mlx when installed, else whisper.cpp)
   -o, --out <dir>        Also copy the results to this folder
       --no-ocr           Do not read the text on screen
       --keep-duplicates  Keep near-identical frames
       --force            Process again even if it was processed before
+      --doctor           Check the setup: what is installed, and how to install the rest
 ```
 
 Any file ffmpeg reads works: `.mp4`, `.mkv`, `.webm`, `.mov`, or audio only (`.mp3`, `.m4a`;
@@ -119,13 +139,18 @@ existed needs `--force`.
 | Variable | Default |
 | --- | --- |
 | `VIDEO_CONTEXT_HOME` | `~/.cache/video-context` |
-| `VIDEO_CONTEXT_MODEL` | a ggml model file to use instead of downloading one |
-| `VIDEO_CONTEXT_WHISPER`, `VIDEO_CONTEXT_FFMPEG`, `VIDEO_CONTEXT_FFPROBE`, `VIDEO_CONTEXT_TESSERACT` | the binaries, when they are not on PATH |
+| `VIDEO_CONTEXT_ENGINE` | `whisper.cpp` or `mlx` (default: mlx when installed) |
+| `VIDEO_CONTEXT_MODEL` | a ggml model file for whisper.cpp, instead of downloading one |
+| `VIDEO_CONTEXT_MLX_MODEL` | a folder or Hugging Face repo for mlx-whisper (default: `mlx-community/whisper-<model>…`) |
+| `VIDEO_CONTEXT_WHISPER`, `VIDEO_CONTEXT_MLX_WHISPER`, `VIDEO_CONTEXT_FFMPEG`, `VIDEO_CONTEXT_FFPROBE`, `VIDEO_CONTEXT_TESSERACT` | the binaries, when they are not on PATH |
 
 ## Troubleshooting
 
-- **`Missing: whisper.cpp's whisper-cli`** — install whisper.cpp, or set `VIDEO_CONTEXT_WHISPER`
-  to its binary (older builds call it `main`).
+- **`Missing: …`** — run `video-context --doctor`: it says what is installed and how to install
+  the rest on your system. A tool installed somewhere else: set its variable (`VIDEO_CONTEXT_WHISPER`
+  to whisper.cpp's binary, which older builds call `main`).
+- **It works in the terminal but the MCP server says a tool is missing** — desktop apps may not
+  see your shell's PATH: [give the server the full paths](docs/install.md#mcp-clients-started-from-the-dock-or-start-menu).
 - **Wrong language or gibberish transcript** — pass `--language`; try a bigger model
   (`--model medium`).
 - **Too many or too few frames** — very static videos give few frames (one a minute at least);
@@ -133,8 +158,11 @@ existed needs `--force`.
 - **Text on screen is noisy** — OCR on video frames is approximate; it is meant to *find* the
   moment, then the agent looks at the frame itself with `get_frames`. Install the language data
   of the video (`tesseract-ocr-<lang>`) for better results.
-- **It takes a while** — whisper is CPU-bound: an hour of video takes a few minutes with `small`
-  on a recent machine; `tiny`/`base` are faster.
+- **It takes a while** — an hour of video takes a few minutes with `small` on a recent machine;
+  `tiny`/`base` are faster. On a Mac with Apple silicon, mlx-whisper (on the GPU) is usually
+  faster than whisper.cpp; on Linux, build whisper.cpp with CUDA for an NVIDIA GPU.
+- **The first video with mlx-whisper seems stuck at 0 %** — it is downloading the model from
+  Hugging Face (once).
 
 ## Privacy
 
@@ -146,7 +174,8 @@ text, frame images and their text — reaches its model.
 ```bash
 pnpm install
 pnpm check                                            # typecheck + unit tests
-VIDEO_CONTEXT_MODEL=/path/ggml-small.bin pnpm test    # also the end-to-end test
+VIDEO_CONTEXT_MODEL=/path/ggml-small.bin pnpm test    # also the end-to-end test (whisper.cpp)
+VIDEO_CONTEXT_ENGINE=mlx pnpm test                    # the end-to-end test with mlx-whisper
 ```
 
 ## License

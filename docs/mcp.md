@@ -3,7 +3,7 @@
 `video-context-mcp` speaks MCP over stdio. It exposes seven tools; an agent typically
 calls them in this order:
 
-1. **`process_video`** `{ path, language?, model?, force? }` — starts processing in the
+1. **`process_video`** `{ path, language?, model?, engine?, force? }` — starts processing in the
    background and returns the video id at once (MCP clients time out on long calls).
    A video processed before is ready immediately.
 2. **`video_status`** `{ videoId }` — progress (`Transcribing… 42%`, `Reading text on screen… 80/200`)
@@ -54,6 +54,10 @@ Any MCP client that runs stdio servers can use it:
 ```
 
 From a local checkout, use `"command": "node", "args": ["/path/to/video-context/dist/mcp.js"]`.
+
+Desktop apps may not see your shell's PATH: if the server reports a missing tool that works
+in your terminal, pass the tools' full paths in `env` — see
+[installing](install.md#mcp-clients-started-from-the-dock-or-start-menu).
 
 ## Privacy
 

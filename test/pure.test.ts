@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { framesAround, framesBetween, parseShowinfoTimes, selectExpression } from '../src/frames.js'
 import { formatTime, parseTime } from '../src/time.js'
-import { fold, parseWhisperJson, rangeText, searchSegments, toMarkdown, toSrt, type Segment } from '../src/transcript.js'
+import { fold, parseMlxJson, parseWhisperJson, rangeText, searchSegments, toMarkdown, toSrt, type Segment } from '../src/transcript.js'
 
 describe('time', () => {
   it('formats and parses', () => {
@@ -35,6 +35,16 @@ describe('transcript', () => {
     expect(segments).toHaveLength(4)
     expect(segments[0]).toEqual({ start: 0, end: 4, text: 'Bienvenidos a la sesión del motor de pagos.' })
     expect(() => parseWhisperJson({})).toThrow(/whisper/)
+  })
+
+  it('parses mlx_whisper JSON the same way', () => {
+    const mlx = {
+      text: '…',
+      language: 'es',
+      segments: whisper.transcription.map((t, id) => ({ id, start: t.offsets.from / 1000, end: t.offsets.to / 1000, text: t.text, no_speech_prob: 0.1 }))
+    }
+    expect(parseMlxJson(mlx)).toEqual(segments)
+    expect(() => parseMlxJson(whisper)).toThrow(/mlx_whisper/)
   })
 
   it('renders Markdown paragraphs with their time, SRT and ranges', () => {

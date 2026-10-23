@@ -1,6 +1,7 @@
-// End to end on a generated 8-second video: the real ffmpeg and whisper.cpp,
-// and the real MCP server over stdio. Skipped unless the tools and a model
-// are available (set VIDEO_CONTEXT_MODEL to a ggml model file).
+// End to end on a generated 8-second video: the real ffmpeg and whisper
+// engine, and the real MCP server over stdio. Skipped unless the tools are
+// installed and, for whisper.cpp, a model is available (set
+// VIDEO_CONTEXT_MODEL to a ggml model file; mlx_whisper downloads its own).
 
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -12,7 +13,8 @@ import { findTools } from '../src/deps.js'
 import { findTesseract } from '../src/ocr.js'
 
 const model = process.env.VIDEO_CONTEXT_MODEL
-const ready = !('missing' in findTools()) && Boolean(model && existsSync(model)) && existsSync('dist/mcp.js')
+const tools = findTools()
+const ready = !('missing' in tools) && (tools.engine === 'mlx' || Boolean(model && existsSync(model))) && existsSync('dist/mcp.js')
 /** A font for drawtext and tesseract: then the second scene carries text to read. */
 const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'
 const ocr = existsSync(FONT) && findTesseract() !== null
@@ -29,7 +31,8 @@ describe.skipIf(!ready)('end to end', () => {
       '-v', 'error', '-y',
       '-f', 'lavfi', '-i', ocr
         ? `color=c=blue:s=640x240:d=4,drawtext=fontfile=${FONT}:text='POST /api/v1/referencias/CreaReferencia':fontsize=22:fontcolor=white:x=20:y=100`
-        : 'color=c=blue:s=640x240:d=4',
+        : // Without a font, a box: two plain colors have the same dHash and one would be dropped.
+          'color=c=blue:s=640x240:d=4,drawbox=x=0:y=0:w=320:h=240:color=white:t=fill',
       '-f', 'lavfi', '-i', 'color=c=red:s=640x240:d=4',
       '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8',
       '-filter_complex', '[1:v][0:v]concat=n=2:v=1:a=0[v]',

@@ -5,21 +5,24 @@ import { cpSync, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 
-import { MODELS, type ModelName } from './deps.js'
+import { doctor, ENGINES, MODELS, type Engine, type ModelName } from './deps.js'
 import { processVideo } from './process.js'
 import { formatTime } from './time.js'
 
 const USAGE = `Usage: video-context <video> [options]
+       video-context --doctor
 
-Transcribes the video on this machine (whisper.cpp) and extracts key frames (ffmpeg).
+Transcribes the video on this machine (whisper.cpp or mlx-whisper) and extracts key frames (ffmpeg).
 
 Options:
   -l, --language <code>  Spoken language, e.g. es, en (default: auto)
   -m, --model <name>     Whisper model: ${MODELS.join(', ')} (default: small)
+  -e, --engine <name>    ${ENGINES.join(' or ')} (default: mlx when installed, else whisper.cpp)
   -o, --out <dir>        Also copy the results to this folder
       --no-ocr           Do not read the text on screen (OCR needs tesseract)
       --keep-duplicates  Keep near-identical frames
       --force            Process again even if it was processed before
+      --doctor           Check the setup: which tools are installed, and how to install the rest
   -h, --help             Show this help
 
 Results: transcript.md (readable, with times), transcript.srt, transcript.json,
@@ -30,6 +33,8 @@ const { values, positionals } = parseArgs({
   options: {
     language: { type: 'string', short: 'l' },
     model: { type: 'string', short: 'm' },
+    engine: { type: 'string', short: 'e' },
+    doctor: { type: 'boolean' },
     out: { type: 'string', short: 'o' },
     force: { type: 'boolean' },
     'no-ocr': { type: 'boolean' },
@@ -38,6 +43,11 @@ const { values, positionals } = parseArgs({
   }
 })
 
+if (values.doctor) {
+  const { ok, lines } = doctor()
+  console.log(lines.join('\n'))
+  process.exit(ok ? 0 : 1)
+}
 if (values.help || positionals.length !== 1) {
   console.log(USAGE)
   process.exit(values.help ? 0 : 1)
@@ -47,12 +57,18 @@ if (values.model && !(MODELS as readonly string[]).includes(values.model)) {
   process.exit(1)
 }
 
+if (values.engine && !(ENGINES as readonly string[]).includes(values.engine)) {
+  console.error(`Unknown engine "${values.engine}". Use one of: ${ENGINES.join(', ')}.`)
+  process.exit(1)
+}
+
 const file = positionals[0]
 let last = ''
 try {
   const { dir, manifest } = await processVideo(file, {
     language: values.language,
     model: values.model as ModelName | undefined,
+    engine: values.engine as Engine | undefined,
     force: values.force,
     ocr: !values['no-ocr'],
     dedupeThreshold: values['keep-duplicates'] ? -1 : undefined,

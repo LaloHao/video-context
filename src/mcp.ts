@@ -10,7 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 
-import { MODELS, type ModelName } from './deps.js'
+import { ENGINES, MODELS, type ModelName } from './deps.js'
 import { framesAround, framesBetween, searchScreen } from './frames.js'
 import { listVideos, loadVideo, processVideo, videoId, type Progress } from './process.js'
 import { formatTime, parseTime } from './time.js'
@@ -53,15 +53,16 @@ server.registerTool(
   'process_video',
   {
     description:
-      'Start processing a local video file: a timestamped transcript (whisper.cpp, on this machine) and key frames. Returns at once with the video id; long videos take minutes, follow them with video_status. A video already processed is ready immediately.',
+      'Start processing a local video file: a timestamped transcript (whisper.cpp or mlx-whisper, on this machine) and key frames. Returns at once with the video id; long videos take minutes, follow them with video_status. A video already processed is ready immediately.',
     inputSchema: {
       path: z.string().describe('Absolute path of the video (or audio) file.'),
       language: z.string().optional().describe('Spoken language code, e.g. "es" or "en". Default: auto-detect.'),
       model: z.enum(MODELS).optional().describe('Whisper model. Default "small"; "medium" or "large-v3-turbo" are more accurate and slower.'),
+      engine: z.enum(ENGINES).optional().describe('Transcription engine. Default: mlx (Apple silicon) when installed, else whisper.cpp.'),
       force: z.boolean().optional().describe('Process again even if it was processed before.')
     }
   },
-  async ({ path, language, model, force }) => {
+  async ({ path, language, model, engine, force }) => {
     let id: string
     try {
       id = videoId(path)
@@ -73,7 +74,7 @@ server.registerTool(
     if (running && !running.error && running.progress.stage !== 'done') return text(`Video ${id} is already being processed: ${running.progress.message}`)
     const job: Job = { progress: { stage: 'audio', message: 'Starting…' } }
     jobs.set(id, job)
-    processVideo(path, { language, model: model as ModelName | undefined, force, onProgress: (p) => (job.progress = p) }).catch((error: unknown) => {
+    processVideo(path, { language, model: model as ModelName | undefined, engine, force, onProgress: (p) => (job.progress = p) }).catch((error: unknown) => {
       job.error = error instanceof Error ? error.message : String(error)
     })
     return text(`Processing started for video ${id}. Call video_status with this id to follow it (an hour of video takes several minutes).`)

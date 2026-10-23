@@ -14,10 +14,14 @@ export function spoken(segment: Segment): string {
   return segment.speaker ? `${segment.speaker}: ${segment.text}` : segment.text
 }
 
+/** Blank pieces and whisper's `[BLANK_AUDIO]` / `(music)`-style markers are not speech. */
+function isSpeech(text: string): boolean {
+  return Boolean(text) && !/^\[[A-Z_ ]+\]$/.test(text) && !/^\(.*\)$/.test(text)
+}
+
 /**
  * Segments from whisper.cpp's `--output-json` (`-oj`) file: `transcription[]`
- * with `offsets.from/to` in milliseconds. Blank pieces and whisper's
- * `[BLANK_AUDIO]`-style markers are dropped.
+ * with `offsets.from/to` in milliseconds.
  */
 export function parseWhisperJson(raw: unknown): Segment[] {
   const list = (raw as { transcription?: unknown })?.transcription
@@ -26,11 +30,25 @@ export function parseWhisperJson(raw: unknown): Segment[] {
   for (const item of list) {
     const offsets = (item as { offsets?: { from?: unknown; to?: unknown } }).offsets
     const text = String((item as { text?: unknown }).text ?? '').trim()
-    if (!text || /^\[[A-Z_ ]+\]$/.test(text) || /^\(.*\)$/.test(text)) continue
+    if (!isSpeech(text)) continue
     const from = Number(offsets?.from)
     const to = Number(offsets?.to)
     if (!Number.isFinite(from) || !Number.isFinite(to)) continue
     segments.push({ start: from / 1000, end: to / 1000, text })
+  }
+  return segments
+}
+
+/** Segments from mlx_whisper's `--output-format json` file: `segments[]` with `start/end` in seconds. */
+export function parseMlxJson(raw: unknown): Segment[] {
+  const list = (raw as { segments?: unknown })?.segments
+  if (!Array.isArray(list)) throw new Error('Not an mlx_whisper JSON transcript (no "segments" list).')
+  const segments: Segment[] = []
+  for (const item of list) {
+    const { start, end, text: raw } = item as { start?: unknown; end?: unknown; text?: unknown }
+    const text = String(raw ?? '').trim()
+    if (!isSpeech(text) || !Number.isFinite(Number(start)) || !Number.isFinite(Number(end))) continue
+    segments.push({ start: Number(start), end: Number(end), text })
   }
   return segments
 }

@@ -2,14 +2,16 @@
 
 ```
 video.mp4 ──ffprobe──▶ duration
-          ──ffmpeg───▶ audio.wav (16 kHz mono) ──whisper.cpp──▶ timestamped segments
+          ──ffmpeg───▶ audio.wav (16 kHz mono) ──whisper.cpp or mlx-whisper──▶ timestamped segments
           ──ffmpeg───▶ key frames + 9×8 thumbnails ──dHash──▶ near-duplicates dropped
                                                      ──tesseract──▶ text on screen (optional)
 ```
 
 1. **Audio and transcript.** The audio track is extracted at 16 kHz mono and transcribed
-   by whisper.cpp's `whisper-cli` with its JSON output, which gives every segment a start
-   and an end time. Blank markers (`[BLANK_AUDIO]`) are dropped.
+   by whisper.cpp's `whisper-cli` or, on Apple silicon when installed, by `mlx_whisper`
+   (the same Whisper models, run on the GPU with Apple's MLX). Both write JSON that gives
+   every segment a start and an end time. Blank markers (`[BLANK_AUDIO]`) are dropped. The
+   engine used is recorded in `manifest.json`.
 2. **Key frames.** One ffmpeg pass selects a frame at every scene change (`scene > 0.25`)
    and at least one every 60 seconds, and writes, for each, a JPEG (at most 1280 px wide)
    and a 9×8 grayscale thumbnail. Frames are named by their second (`00754s-00012.jpg`).
@@ -42,13 +44,17 @@ a few minutes with the `small` model.
 
 ## Choosing a model
 
-| Model | Size | Notes |
-| --- | --- | --- |
-| `tiny`, `base` | 75–142 MB | Fast; fine for clear English speech. |
-| `small` (default) | 465 MB | Good balance; good for Spanish and other languages. |
-| `medium` | 1.5 GB | More accurate, slower. |
-| `large-v3-turbo` | 1.6 GB | Close to `large-v3`, much faster. |
-| `large-v3` | 2.9 GB | Most accurate, slowest. |
+| Model | Size | mlx-whisper repo | Notes |
+| --- | --- | --- | --- |
+| `tiny`, `base` | 75–142 MB | `mlx-community/whisper-{tiny,base}-mlx` | Fast; fine for clear English speech. |
+| `small` (default) | 465 MB | `mlx-community/whisper-small-mlx` | Good balance; good for Spanish and other languages. |
+| `medium` | 1.5 GB | `mlx-community/whisper-medium-mlx` | More accurate, slower. |
+| `large-v3-turbo` | 1.6 GB | `mlx-community/whisper-large-v3-turbo` | Close to `large-v3`, much faster. |
+| `large-v3` | 2.9 GB | `mlx-community/whisper-large-v3-mlx` | Most accurate, slowest. |
+
+whisper.cpp's models (`ggml-<model>.bin`) are downloaded to `~/.cache/video-context/models`;
+mlx-whisper downloads its own to the Hugging Face cache. `VIDEO_CONTEXT_MODEL` /
+`VIDEO_CONTEXT_MLX_MODEL` use another model (a fine-tune, a quantized one).
 
 Pass the language (`--language es`) when you know it: detection on the first seconds can
 be wrong when a video starts with music or silence.
