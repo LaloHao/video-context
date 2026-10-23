@@ -25,6 +25,8 @@ calls them in this order:
    each with the text read on it. `at` gives the frames closest to a time; `from`/`to`
    spreads them over a range.
 6. **`list_videos`**, **`list_frames`** — what is processed, and when each frame is.
+7. **`search_videos`** `{ query, limit? }` — the same search over every processed video at
+   once: which videos say or show it, and when (*"in which meeting did they talk about…"*).
 
 ## Claude Code
 

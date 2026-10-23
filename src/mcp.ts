@@ -12,6 +12,7 @@ import { z } from 'zod'
 
 import { ENGINES, MODELS, type ModelName } from './deps.js'
 import { framesAround, framesBetween, searchScreen } from './frames.js'
+import { searchLibrary } from './library.js'
 import { listVideos, loadVideo, processVideo, videoId, type Progress } from './process.js'
 import { formatTime, parseTime } from './time.js'
 import { fold, rangeText, searchSegments } from './transcript.js'
@@ -197,6 +198,33 @@ server.registerTool(
     const video = loadVideo(id)
     if (!video) return fail(`Video ${id} is not processed (yet).`)
     return text(video.manifest.frames.map((f) => formatTime(f.time)).join(', '))
+  }
+)
+
+server.registerTool(
+  'search_videos',
+  {
+    description:
+      'Find something across every processed video at once: which videos say it or show it on screen, and when. Use it to answer "in which meeting did they talk about…". Every word of the query must appear (accents and case aside), so search one or two key words in the form spoken ("table", not "HTML tables"), and one topic per call. Then read a video with get_transcript or search_transcript.',
+    inputSchema: {
+      query: z.string(),
+      limit: z.number().int().min(1).max(20).optional().describe('Hits per video (default 5).')
+    }
+  },
+  async ({ query, limit }) => {
+    const found = searchLibrary(query, limit ?? 5)
+    if (found.length === 0) return text(`"${query}" is not found in any processed video. Try other words or a synonym.`)
+    return text(
+      found
+        .map((v) => {
+          const lines = [
+            ...v.said.map((h) => `[${formatTime(h.start)}–${formatTime(h.end)}] ${h.text}`),
+            ...v.shown.map((h) => `[${formatTime(h.time)}] (on screen) ${h.text}`)
+          ]
+          return `## ${v.title} (video ${v.id}, ${formatTime(v.duration)})\n${lines.join('\n')}`
+        })
+        .join('\n\n')
+    )
   }
 )
 

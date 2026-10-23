@@ -25,10 +25,12 @@
   "type": "module",
   "bin": {
     "video-context": "dist/cli.js",
-    "video-context-mcp": "dist/mcp.js"
+    "video-context-mcp": "dist/mcp.js",
+    "video-context-ui": "dist/ui.js"
   },
   "files": [
     "dist",
+    "ui",
     "README.md",
     "LICENSE"
   ],
@@ -36,11 +38,12 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js dist/mcp.js",
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js dist/mcp.js dist/ui.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test",
-    "prepare": "pnpm build"
+    "prepare": "pnpm build",
+    "ui": "pnpm build && node dist/ui.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

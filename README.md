@@ -105,9 +105,38 @@ modification time.
 | `search_transcript` | Where something is said or shown on screen, with times (accents and case aside). |
 | `get_frames` | Key frames as images with their on-screen text: around a time or over a range. |
 | `list_frames` | The time of every key frame. |
+| `search_videos` | Where something is said or shown across every processed video. |
 
 Claude Code: `claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp`.
 Other clients and example prompts: [docs/mcp.md](docs/mcp.md).
+
+## Web page
+
+```bash
+npx -p @lalohao/video-context video-context-ui --open
+```
+
+A page on `http://localhost:4317` to watch a processed video next to its transcript: the
+current line follows the player, a click on a line or a key frame seeks there, and the search
+finds words said or shown on screen, in this video or in all of them. **+ New video** processes
+a file (dropped on the page or by path) with the language, whisper model and engine you pick.
+
+![The page: the video, its chapters and key frames, the transcript following the player, and Claude's answer with the frame it looked at and links to each moment](docs/images/ui-chat.png)
+
+- **Ask Claude** through the [`claude` CLI](https://claude.com/claude-code) (your own login;
+  pick the model at the top), about this video or about all your videos at once (*"in which
+  meeting did they decide the deadline?"*). Claude gets the transcript and this package's MCP
+  tools, so it can search and look at the frames; the frames it looked at show in the answer,
+  and every time it cites (`[3:07]`, `[V2 3:07]` for another video) is a link to that moment.
+- **Chapters**: Claude splits the video where the topic changes; they show on the bar under the
+  player, in the transcript and in their own tab.
+- **Clips**: mark a start and an end (`[` and `]`, a range in an answer, or selected
+  transcript lines) and download them as MP4, or as a GIF up to 30 s.
+- **Notes**: write one at the current time (`N`), bookmark it (`B`), or save an answer from the
+  chat; they are kept next to the video (`notes.json`) and exported to Markdown with the
+  chapters and the conversation.
+
+The page listens only on 127.0.0.1. A tour with screenshots of each part: **[docs/ui.md](docs/ui.md)**.
 
 ## Who said what
 

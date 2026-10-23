@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>video-context</title>
+<style>
+:root {
+  --bg: #f6f6f4; --panel: #ffffff; --line: #e3e2de; --text: #1d1d1b; --muted: #6b6a66;
+  --accent: #c2410c; --accent-soft: #fdeee6; --hit: #f5c400; --hit-soft: #fff1a8; --err: #b91c1c;
+  --chap-a: #ecebe6; --chap-b: #dedcd5; --note: #2563eb;
+  --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --panel: #1f1f1d; --line: #33322f; --text: #ecebe7; --muted: #9a9993;
+    --accent: #fb923c; --accent-soft: #3a2518; --hit: #facc15; --hit-soft: #5c4d00; --err: #f87171;
+    --chap-a: #2b2a27; --chap-b: #373632; --note: #60a5fa; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.btn { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; white-space: nowrap; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.small { padding: 2px 8px; font-size: 12.5px; }
+.btn:disabled { opacity: .5; cursor: default; }
+select, input[type=text], input[type=search], textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; }
+select:focus, input:focus, textarea:focus, [contenteditable]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.err { color: var(--err); }
+mark { background: var(--hit-soft); color: inherit; border-radius: 2px; }
+
+header { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0 6px 0 0; font-weight: 650; letter-spacing: -.01em; }
+header h1 span { color: var(--accent); }
+#videoSelect { min-width: 0; max-width: 360px; flex: 1 1 200px; }
+#jobs { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.job { background: var(--accent-soft); border-radius: 999px; padding: 3px 10px; }
+.job.err { color: var(--err); }
+.spacer { flex: 1; }
+header label { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(330px, 430px); grid-template-rows: minmax(0, 1fr); }
+#empty { grid-column: 1 / -1; margin: auto; text-align: center; padding: 40px 16px; }
+#left { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+#left > *:not(#transcript):not(#results) { flex-shrink: 0; }
+#playerWrap { background: #000; display: flex; justify-content: center; }
+video { width: 100%; max-height: 42vh; display: block; background: #000; }
+#missing { color: #ddd; padding: 40px 16px; text-align: center; }
+
+#timeline { position: relative; height: 22px; background: var(--chap-a); cursor: pointer; overflow: hidden; }
+.tl-chap { position: absolute; top: 0; bottom: 0; border-right: 1px solid var(--panel); }
+.tl-chap:nth-child(even) { background: var(--chap-b); }
+.tl-chap span { position: absolute; left: 6px; top: 2px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; right: 4px; color: var(--muted); pointer-events: none; }
+.tl-hit { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--hit); pointer-events: none; }
+.tl-note { position: absolute; bottom: 0; width: 8px; height: 8px; margin-left: -4px; background: var(--note); border-radius: 50% 50% 0 0; pointer-events: none; }
+.tl-clip { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 30%, transparent); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); pointer-events: none; }
+.tl-head { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); pointer-events: none; }
+#under { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; font-size: 12.5px; }
+#chapNow { flex: 1; min-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+#clipbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+#frames { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); scrollbar-width: thin; }
+#frames:empty { display: none; }
+.frame { flex: 0 0 auto; border: 2px solid transparent; border-radius: 6px; padding: 0; background: none; position: relative; }
+.frame img { height: 50px; display: block; border-radius: 4px; }
+.frame span { position: absolute; bottom: 2px; right: 3px; font: 10.5px var(--mono); background: rgba(0,0,0,.7); color: #fff; padding: 0 3px; border-radius: 3px; }
+.frame.active { border-color: var(--accent); }
+.frame.hit { outline: 2px solid var(--hit); }
+
+#tbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+#search { flex: 1 1 160px; min-width: 0; }
+#hits { font-size: 12.5px; }
+label.check { display: flex; align-items: center; gap: 4px; font-size: 12.5px; user-select: none; white-space: nowrap; }
+#transcript, #results { flex: 1; overflow-y: auto; padding: 6px 0 0; min-height: 0; }
+/* Room after the last line, so it can scroll to the middle. */
+#transcript::after, #results::after { content: ""; display: block; height: 40vh; }
+.seg { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 4px 16px; cursor: pointer; border-left: 3px solid transparent; }
+.seg:hover { background: var(--accent-soft); }
+.seg.active { background: var(--accent-soft); border-left-color: var(--accent); }
+.seg .t { color: var(--muted); font: 12.5px/1.9 var(--mono); }
+.seg .who { font-weight: 600; margin-right: 4px; }
+.seg.dim { opacity: .35; }
+.seg.cur-hit { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chap-h { padding: 14px 16px 4px 91px; font-weight: 650; font-size: 13px; color: var(--accent); cursor: pointer; }
+.group { padding: 10px 16px 4px; font-weight: 650; display: flex; gap: 8px; align-items: baseline; }
+.group .muted { font-weight: 400; font-size: 12.5px; }
+.result { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 4px 16px; cursor: pointer; }
+.result:hover { background: var(--accent-soft); }
+.result .t { color: var(--muted); font: 12.5px/1.9 var(--mono); }
+.result .kind { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-right: 4px; }
+
+#side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+#tabs { display: flex; border-bottom: 1px solid var(--line); padding: 0 8px; }
+#tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 12px 8px; color: var(--muted); }
+#tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+#tabs .count { font-size: 11px; background: var(--bg); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+.pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pane-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.pane-body { flex: 1; overflow-y: auto; padding: 12px; }
+
+#messages { display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 100%; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--accent-soft); padding: 8px 12px; border-radius: 12px 12px 2px 12px; max-width: 88%; white-space: pre-wrap; }
+.msg.assistant p { margin: 0 0 8px; }
+.msg.assistant ul, .msg.assistant ol { margin: 0 0 8px; padding-left: 20px; }
+.msg.assistant code { font: 12.5px var(--mono); background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+.msg.assistant pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; }
+.msg.assistant pre code { background: none; padding: 0; }
+.msg.assistant h4 { margin: 10px 0 4px; font-size: 14px; }
+.ts { font: 12.5px var(--mono); background: var(--accent-soft); color: var(--accent); border: 0; border-radius: 4px; padding: 0 4px; }
+.ts:hover { background: var(--accent); color: #fff; }
+.cut { border: 0; background: none; padding: 0 2px; font-size: 12px; opacity: .7; }
+.cut:hover { opacity: 1; }
+.tools { font-size: 12px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.tools span { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.seen { display: flex; gap: 4px; margin: 4px 0 8px; flex-wrap: wrap; }
+.seen img { height: 44px; border-radius: 4px; cursor: pointer; border: 1px solid var(--line); }
+.meta { font-size: 11.5px; color: var(--muted); margin-top: 4px; display: flex; gap: 10px; align-items: center; }
+.meta button { background: none; border: 0; color: var(--accent); padding: 0; font-size: 11.5px; }
+.typing::after { content: "▍"; animation: blink 1s steps(2) infinite; color: var(--accent); }
+@keyframes blink { 50% { opacity: 0; } }
+#suggest { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 8px; }
+#suggest button { font-size: 12.5px; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 3px 10px; }
+#suggest button:hover { border-color: var(--accent); }
+#composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: flex-end; }
+#question { flex: 1; resize: none; min-height: 40px; max-height: 160px; }
+
+.item { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; padding: 8px; border-radius: 8px; align-items: start; }
+.item:hover { background: var(--bg); }
+.item.active { background: var(--accent-soft); }
+.item .title { font-weight: 600; cursor: pointer; }
+.item .sum { color: var(--muted); font-size: 13px; }
+.item .del { background: none; border: 0; color: var(--muted); visibility: hidden; padding: 0 4px; }
+.item:hover .del { visibility: visible; }
+.item .text { min-height: 1.5em; white-space: pre-wrap; border-radius: 4px; padding: 0 4px; margin: 0 -4px; }
+.item .text:empty::before { content: "★ Bookmark"; color: var(--muted); }
+#noteForm { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+#noteText { flex: 1; min-width: 0; }
+.placeholder { margin: 24px auto; text-align: center; max-width: 290px; }
+
+#selMenu { position: fixed; z-index: 5; display: none; gap: 4px; }
+dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text); width: min(520px, calc(100vw - 32px)); padding: 20px; }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog h2 { margin: 0 0 12px; font-size: 16px; }
+#drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 24px; text-align: center; margin-bottom: 12px; }
+#drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+.row > label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); flex: 1 1 120px; }
+.row input[type=text] { flex: 1; }
+progress { width: 100%; accent-color: var(--accent); }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 10; max-width: calc(100vw - 32px); }
+
+@media (max-width: 860px) {
+  main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; overflow-y: auto; }
+  #left { border-right: 0; min-height: 75vh; }
+  #side { min-height: 75vh; border-top: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>video<span>·</span>context</h1>
+  <select id="videoSelect" aria-label="Video"></select>
+  <button class="btn primary" id="newBtn">+ New video</button>
+  <div id="jobs"></div>
+  <span class="spacer"></span>
+  <label>Claude <select id="model" aria-label="Claude model"></select></label>
+  <span class="muted" style="font-size:12px" title="Space play/pause · J/L ±5 s · / search · N note · B bookmark · [ ] clip start/end">Keys: Space J L / N B [ ]</span>
+</header>
+
+<main id="app">
+  <div id="empty" hidden><h2>No processed videos yet</h2><p class="muted">Process a recording to watch it with its transcript and ask Claude about it.</p><button class="btn primary" onclick="openNew()">+ New video</button></div>
+  <section id="left">
+    <div id="playerWrap"><video id="player" controls preload="metadata"></video></div>
+    <div id="timeline" title="Chapters, notes (blue) and search hits (yellow)"></div>
+    <div id="under">
+      <span id="chapNow" class="muted"></span>
+      <div id="clipbar">
+        <span class="muted">✂ Clip</span>
+        <button class="btn small mono" id="setA" title="Start at the current time ( [ )">A —</button>
+        <button class="btn small mono" id="setB" title="End at the current time ( ] )">B —</button>
+        <button class="btn small" id="clipMp4" disabled>MP4</button>
+        <button class="btn small" id="clipGif" disabled title="Up to 30 s">GIF</button>
+        <button class="btn small" id="clipPlay" disabled title="Play the clip">▶</button>
+        <button class="btn small" id="clipClear" hidden title="Clear">×</button>
+      </div>
+    </div>
+    <div id="frames"></div>
+    <div id="tbar">
+      <input type="search" id="search" placeholder="Search said or shown on screen…">
+      <label class="check" title="Search every processed video"><input type="checkbox" id="searchAll"> All videos</label>
+      <span id="hits" class="muted"></span>
+      <button class="btn small" id="prevHit" title="Previous (Shift+Enter)">↑</button>
+      <button class="btn small" id="nextHit" title="Next (Enter)">↓</button>
+      <label class="check"><input type="checkbox" id="follow" checked> Follow</label>
+      <select id="download" aria-label="Download transcript">
+        <option value="">Download…</option><option value="md">Markdown</option><option value="srt">SRT</option><option value="json">JSON</option>
+      </select>
+    </div>
+    <div id="transcript"></div>
+    <div id="results" hidden></div>
+  </section>
+
+  <section id="side">
+    <nav id="tabs">
+      <button data-tab="chat" class="on">Chat</button>
+      <button data-tab="chapters">Chapters<span class="count" id="chapCount"></span></button>
+      <button data-tab="notes">Notes<span class="count" id="noteCount"></span></button>
+    </nav>
+
+    <div class="pane" id="pane-chat">
+      <div class="pane-head">
+        <select id="scope" aria-label="Ask about"><option value="video">About this video</option><option value="library">About all my videos</option></select>
+        <span class="spacer"></span>
+        <button class="btn small" id="clearChat" title="New conversation">New chat</button>
+      </div>
+      <div class="pane-body" id="chatBody"><div id="messages"></div></div>
+      <div id="suggest"></div>
+      <form id="composer">
+        <textarea id="question" rows="1" placeholder="Ask about this video… (Enter to send)"></textarea>
+        <button class="btn primary" id="send">Send</button>
+      </form>
+    </div>
+
+    <div class="pane" id="pane-chapters" hidden>
+      <div class="pane-head">
+        <span class="muted" id="chapStatus" style="flex:1;font-size:12.5px">Claude reads the transcript and splits it where the topic changes.</span>
+        <button class="btn small primary" id="genChapters">Generate</button>
+      </div>
+      <div class="pane-body" id="chapters"></div>
+    </div>
+
+    <div class="pane" id="pane-notes" hidden>
+      <form id="noteForm">
+        <button type="button" class="ts" id="noteAt" title="Time of the note: the player's">0:00</button>
+        <input type="text" id="noteText" placeholder="Note at this time… (N)">
+        <button class="btn small primary">Add</button>
+        <button type="button" class="btn small" id="bookmark" title="Bookmark this time (B)">★</button>
+      </form>
+      <div class="pane-body" id="notes"></div>
+      <div class="pane-head" style="border-top:1px solid var(--line);border-bottom:0">
+        <span class="muted" style="flex:1;font-size:12.5px">Notes, chapters and this video's chat</span>
+        <button class="btn small" id="exportMd">Export Markdown</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="selMenu"><button class="btn small primary" id="selAsk">Ask about this</button><button class="btn small" id="selNote">Note</button><button class="btn small" id="selClip">✂ Clip</button></div>
+<div id="toast" hidden></div>
+
+<dialog id="newDialog">
+  <h2>Process a video</h2>
+  <div id="drop">Drop a video or audio file here, or <label style="color:var(--accent);cursor:pointer;text-decoration:underline">choose one<input type="file" id="file" accept="video/*,audio/*,.mkv" hidden></label>
+    <div id="fileName" class="muted"></div>
+  </div>
+  <div class="row"><input type="text" id="path" placeholder="…or a path on this computer, e.g. ~/Videos/meeting.mp4"></div>
+  <div class="row">
+    <label>Language<select id="language">
+      <option value="auto">Auto-detect</option><option value="es">Spanish</option><option value="en">English</option><option value="pt">Portuguese</option><option value="fr">French</option><option value="de">German</option><option value="it">Italian</option>
+    </select></label>
+    <label>Whisper model<select id="wmodel"></select></label>
+    <label>Engine<select id="engine"><option value="">Default</option></select></label>
+  </div>
+  <div class="row"><label class="check" style="flex-direction:row;color:var(--text)"><input type="checkbox" id="force"> Process again if already processed</label></div>
+  <progress id="uploadBar" value="0" max="100" hidden></progress>
+  <div id="newErr" class="err"></div>
+  <div class="row" style="justify-content:flex-end;margin:12px 0 0">
+    <button class="btn" id="cancelNew" type="button">Cancel</button>
+    <button class="btn primary" id="startNew" type="button">Process</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (s) => document.querySelector(s)
+const api = (path, opts = {}) => fetch(path, { ...opts, headers: { 'x-video-context': '1', ...(typeof opts.body === 'string' ? { 'content-type': 'application/json' } : {}), ...opts.headers } })
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v) } catch { return d } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} }
+}
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const fmt = (sec) => { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = String(sec % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}` }
+const parseT = (t) => String(t).split(':').map(Number).reduce((a, n) => a * 60 + n, 0)
+const fold = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+const frameUrl = (id, f) => `/api/videos/${id}/frames/${encodeURIComponent(f.file.split('/').pop())}`
+const indexAt = (list, t, key) => { let lo = 0, hi = list.length - 1, ans = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (key(list[mid]) <= t) { ans = mid; lo = mid + 1 } else hi = mid - 1 } return ans }
+let toastTimer
+function toast(text) { const t = $('#toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3500) }
+
+const player = $('#player')
+let config = { claudeModels: ['sonnet'], whisperModels: [], engines: [] }
+let videos = []
+let current = null   // { manifest, segments, available, chapters, notes }
+let segEls = []
+let chat = { sessionId: null, messages: [] }
+let abort = null
+let clipA = null, clipB = null
+
+// ---------- videos ----------
+async function loadList(selectId) {
+  videos = await (await api('/api/videos')).json()
+  const sel = $('#videoSelect')
+  sel.innerHTML = videos.length ? videos.map((v) => `<option value="${v.id}">${esc(v.title)} · ${fmt(v.duration)}${v.available ? '' : ' (file missing)'}</option>`).join('') : '<option value="">No videos yet</option>'
+  const want = selectId || location.hash.slice(1) || store.get('last', '')
+  const id = videos.some((v) => v.id === want) ? want : videos[0]?.id
+  if (id) { sel.value = id; if (current?.manifest.id !== id) await openVideo(id) }
+  else { $('#left').hidden = $('#side').hidden = true; $('#empty').hidden = false }
+}
+
+async function openVideo(id, at) {
+  if (current?.manifest.id === id) { if (at !== undefined) seek(at); return }
+  const res = await api(`/api/videos/${id}`)
+  if (!res.ok) return
+  current = await res.json()
+  $('#left').hidden = $('#side').hidden = false
+  $('#empty').hidden = true
+  $('#videoSelect').value = id
+  history.replaceState(null, '', `#${id}`)
+  store.set('last', id)
+  const m = current.manifest
+  document.title = `${m.title} — video-context`
+  const wrap = $('#playerWrap')
+  lastActive = lastFrame = lastChap = -1
+  setClip(null, null)
+  if (current.available) {
+    wrap.innerHTML = ''; wrap.appendChild(player)
+    player.src = `/api/videos/${id}/media`
+    player.currentTime = at ?? store.get(`pos:${id}`, 0)
+    if (at !== undefined) player.play().catch(() => {})
+  } else {
+    player.removeAttribute('src')
+    wrap.innerHTML = `<div id="missing">The file is no longer at <code>${esc(m.source)}</code>.<br>The transcript and frames are still here.</div>`
+  }
+  renderFrames(); renderTranscript(); renderChapters(); renderNotes(); renderTimeline(); runSearch()
+  if (scope() === 'video') loadChat()
+  $('#clipbar').style.visibility = current.available ? '' : 'hidden'
+}
+
+function renderFrames() {
+  const m = current.manifest
+  $('#frames').innerHTML = m.frames.map((f, i) => `<button class="frame" data-i="${i}" data-t="${f.time}" title="${fmt(f.time)}${f.text ? ' — ' + esc(f.text.slice(0, 120)) : ''}"><img loading="lazy" src="${frameUrl(m.id, f)}" alt=""><span>${fmt(f.time)}</span></button>`).join('')
+}
+
+function renderTranscript() {
+  const chapters = current.chapters
+  let c = 0, html = ''
+  current.segments.forEach((s, i) => {
+    while (c < chapters.length && chapters[c].start <= s.start + 0.5) { html += `<div class="chap-h" data-t="${current.segments[i].start}">${esc(chapters[c].title)}</div>`; c++ }
+    html += `<div class="seg" data-i="${i}"><span class="t">${fmt(s.start)}</span><span>${s.speaker ? `<span class="who">${esc(s.speaker)}:</span>` : ''}<span class="tx">${esc(s.text)}</span></span></div>`
+  })
+  $('#transcript').innerHTML = html
+  segEls = [...$('#transcript').querySelectorAll('.seg')]
+}
+
+// The bar under the player: chapters, notes, search hits and the clip, over the whole duration.
+function renderTimeline() {
+  if (!current) return
+  const d = current.manifest.duration || 1, pct = (t) => `${Math.min(100, Math.max(0, (t / d) * 100))}%`
+  const ch = current.chapters.map((c, i) => { const end = current.chapters[i + 1]?.start ?? d; return `<div class="tl-chap" style="left:${pct(c.start)};width:${pct(end - c.start)}" title="${fmt(c.start)} ${esc(c.title)}"><span>${esc(c.title)}</span></div>` }).join('')
+  const notes = current.notes.map((n) => `<div class="tl-note" style="left:${pct(n.time)}"></div>`).join('')
+  const hitTicks = hits.map((i) => `<div class="tl-hit" style="left:${pct(current.segments[i].start)}"></div>`).join('') + screenHits.map((t) => `<div class="tl-hit" style="left:${pct(t)}"></div>`).join('')
+  const clip = clipA !== null ? `<div class="tl-clip" style="left:${pct(clipA)};width:${pct((clipB ?? clipA) - clipA)}"></div>` : ''
+  $('#timeline').innerHTML = ch + hitTicks + notes + clip + `<div class="tl-head" id="tlHead" style="left:${pct(player.currentTime || 0)}"></div>`
+}
+$('#timeline').addEventListener('click', (e) => { const r = e.currentTarget.getBoundingClientRect(); seek(((e.clientX - r.left) / r.width) * current.manifest.duration) })
+
+$('#transcript').addEventListener('click', (e) => {
+  if (getSelection().toString()) return
+  const h = e.target.closest('.chap-h'); if (h) return seek(+h.dataset.t)
+  const el = e.target.closest('.seg'); if (el) seek(current.segments[+el.dataset.i].start)
+})
+$('#frames').addEventListener('click', (e) => { const el = e.target.closest('.frame'); if (el) seek(+el.dataset.t) })
+$('#videoSelect').addEventListener('change', (e) => e.target.value && openVideo(e.target.value))
+$('#download').addEventListener('change', (e) => { if (e.target.value && current) location.href = `/api/videos/${current.manifest.id}/transcript/${e.target.value}`; e.target.value = '' })
+
+function seek(t) {
+  if (!current?.available) return
+  player.currentTime = Math.max(0, t)
+  player.play().catch(() => {})
+  $('#follow').checked = true
+}
+
+// The transcript, frames, chapters and timeline follow the player.
+let lastActive = -1, lastFrame = -1, lastChap = -1, userScrolledAt = 0, savedAt = 0
+player.addEventListener('timeupdate', () => {
+  if (!current) return
+  const t = player.currentTime
+  const i = indexAt(current.segments, t, (s) => s.start)
+  if (i !== lastActive) {
+    segEls[lastActive]?.classList.remove('active'); segEls[i]?.classList.add('active'); lastActive = i
+    if (i >= 0 && $('#follow').checked && !$('#transcript').hidden && Date.now() - userScrolledAt > 3000) segEls[i].scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+  const f = indexAt(current.manifest.frames, t, (x) => x.time)
+  if (f !== lastFrame) {
+    const els = $('#frames').children
+    els[lastFrame]?.classList.remove('active'); els[f]?.classList.add('active'); lastFrame = f
+    if (els[f]) $('#frames').scrollTo({ left: els[f].offsetLeft - $('#frames').clientWidth / 2, behavior: 'smooth' })
+  }
+  const c = indexAt(current.chapters, t, (x) => x.start)
+  if (c !== lastChap) {
+    const items = $('#chapters').querySelectorAll('.item')
+    items[lastChap]?.classList.remove('active'); items[c]?.classList.add('active'); lastChap = c
+    $('#chapNow').textContent = current.chapters[c]?.title ?? ''
+  }
+  const head = $('#tlHead'); if (head) head.style.left = `${(t / (current.manifest.duration || 1)) * 100}%`
+  $('#noteAt').textContent = fmt(t)
+  if (clipB !== null && playingClip && t >= clipB) { player.pause(); playingClip = false }
+  if (Date.now() - savedAt > 2000) { store.set(`pos:${current.manifest.id}`, t); savedAt = Date.now() }
+})
+$('#transcript').addEventListener('wheel', () => (userScrolledAt = Date.now()), { passive: true })
+$('#transcript').addEventListener('touchmove', () => (userScrolledAt = Date.now()), { passive: true })
+
+// ---------- search ----------
+let hits = [], screenHits = [], hitPos = -1
+function runSearch() {
+  if (!current) return
+  if ($('#searchAll').checked) return searchLibrary()
+  $('#results').hidden = true; $('#transcript').hidden = false
+  const q = fold($('#search').value.trim())
+  hits = []; screenHits = []; hitPos = -1
+  current.segments.forEach((s, i) => {
+    const el = segEls[i], tx = el.querySelector('.tx')
+    el.classList.remove('cur-hit')
+    if (!q) { tx.innerHTML = esc(s.text); el.classList.remove('dim'); return }
+    const found = q.split(/\s+/).every((w) => fold(`${s.speaker ?? ''} ${s.text}`).includes(w))
+    el.classList.toggle('dim', !found)
+    tx.innerHTML = highlight(s.text, q)
+    if (found) hits.push(i)
+  })
+  const frameEls = $('#frames').children
+  current.manifest.frames.forEach((f, i) => { const on = !!q && !!f.text && q.split(/\s+/).every((w) => fold(f.text).includes(w)); frameEls[i]?.classList.toggle('hit', on); if (on) screenHits.push(f.time) })
+  $('#hits').textContent = q ? `${hits.length} said${screenHits.length ? ` · ${screenHits.length} on screen` : ''}` : ''
+  renderTimeline()
+}
+function highlight(text, q) {
+  // Match on folded text, mark the same span of the original (folding keeps length for most Latin text).
+  const words = q.split(/\s+/).filter(Boolean); const f = fold(text)
+  if (f.length !== text.length) return esc(text)
+  const marks = []
+  for (const w of words) { let at = f.indexOf(w); while (at >= 0) { marks.push([at, at + w.length]); at = f.indexOf(w, at + w.length) } }
+  marks.sort((a, b) => a[0] - b[0])
+  let out = '', pos = 0
+  for (const [a, b] of marks) { if (a < pos) continue; out += esc(text.slice(pos, a)) + '<mark>' + esc(text.slice(a, b)) + '</mark>'; pos = b }
+  return out + esc(text.slice(pos))
+}
+function gotoHit(dir) {
+  if ($('#searchAll').checked || !hits.length) return
+  segEls[hits[hitPos]]?.classList.remove('cur-hit')
+  hitPos = (hitPos + dir + hits.length) % hits.length
+  const el = segEls[hits[hitPos]]; el.classList.add('cur-hit'); el.scrollIntoView({ block: 'center' })
+  userScrolledAt = Date.now()
+  seek(current.segments[hits[hitPos]].start)
+}
+let libraryQuery = 0
+async function searchLibrary() {
+  const q = $('#search').value.trim()
+  hits = []; screenHits = []; renderTimeline()
+  for (const el of segEls) el.classList.remove('dim')
+  $('#transcript').hidden = !!q; $('#results').hidden = !q
+  if (!q) { $('#hits').textContent = ''; return }
+  const n = ++libraryQuery
+  const found = await (await api(`/api/search?q=${encodeURIComponent(q)}`)).json()
+  if (n !== libraryQuery) return
+  const fq = fold(q)
+  const total = found.reduce((a, v) => a + v.said.length + v.shown.length, 0)
+  $('#hits').textContent = `${total} in ${found.length} video${found.length === 1 ? '' : 's'}`
+  $('#results').innerHTML = found.length ? found.map((v) => `<div class="group">${esc(v.title)} <span class="muted">${fmt(v.duration)}</span></div>` +
+    [...v.said.map((h) => ({ t: h.start, text: h.text, kind: '' })), ...v.shown.map((h) => ({ t: h.time, text: h.text, kind: 'on screen' }))].sort((a, b) => a.t - b.t)
+      .map((h) => `<div class="result" data-v="${v.id}" data-t="${h.t}"><span class="t">${fmt(h.t)}</span><span>${h.kind ? `<span class="kind">${h.kind}</span>` : ''}${highlight(h.text.replace(/\s+/g, ' '), fq)}</span></div>`).join('')).join('')
+    : `<p class="placeholder muted">Not said or shown in any video.</p>`
+}
+$('#results').addEventListener('click', (e) => { const r = e.target.closest('.result'); if (r) openVideo(r.dataset.v, +r.dataset.t) })
+let searchTimer
+$('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, $('#searchAll').checked ? 250 : 120) })
+$('#searchAll').addEventListener('change', runSearch)
+$('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gotoHit(e.shiftKey ? -1 : 1) } if (e.key === 'Escape') { e.target.value = ''; runSearch(); e.target.blur() } })
+$('#nextHit').onclick = () => gotoHit(1)
+$('#prevHit').onclick = () => gotoHit(-1)
+
+// ---------- clips ----------
+let playingClip = false
+function setClip(a, b) {
+  clipA = a; clipB = b
+  if (clipA !== null && clipB !== null && clipB < clipA) [clipA, clipB] = [clipB, clipA]
+  $('#setA').textContent = `A ${clipA === null ? '—' : fmt(clipA)}`
+  $('#setB').textContent = `B ${clipB === null ? '—' : fmt(clipB)}`
+  const ready = clipA !== null && clipB !== null && clipB - clipA >= 0.5
+  $('#clipMp4').disabled = $('#clipPlay').disabled = !ready
+  $('#clipGif').disabled = !ready || clipB - clipA > 30 || !current?.manifest.frames.length
+  $('#clipMp4').textContent = current?.manifest.frames.length === 0 ? 'M4A' : 'MP4'
+  $('#clipClear').hidden = clipA === null && clipB === null
+  renderTimeline()
+}
+function downloadClip(format) {
+  toast(`Making the ${format.toUpperCase()}… it downloads when ready.`)
+  location.href = `/api/videos/${current.manifest.id}/clip?from=${clipA.toFixed(2)}&to=${clipB.toFixed(2)}&format=${format}`
+}
+$('#setA').onclick = () => setClip(player.currentTime, clipB)
+$('#setB').onclick = () => setClip(clipA, player.currentTime)
+$('#clipMp4').onclick = () => downloadClip('mp4')
+$('#clipGif').onclick = () => downloadClip('gif')
+$('#clipPlay').onclick = () => { seek(clipA); playingClip = true }
+$('#clipClear').onclick = () => setClip(null, null)
+
+// ---------- keyboard ----------
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey || !current) return
+  const k = e.key
+  if (k === '/') { e.preventDefault(); $('#search').focus(); return }
+  if (!current.available) return
+  if (k === ' ' || k === 'k') { e.preventDefault(); player.paused ? player.play() : player.pause() }
+  else if (k === 'j' || k === 'ArrowLeft') player.currentTime -= 5
+  else if (k === 'l' || k === 'ArrowRight') player.currentTime += 5
+  else if (k === 'n') { e.preventDefault(); showTab('notes'); $('#noteText').focus() }
+  else if (k === 'b') addNote(player.currentTime, '')
+  else if (k === '[') $('#setA').click()
+  else if (k === ']') $('#setB').click()
+})
+
+// ---------- tabs ----------
+function showTab(name) {
+  for (const b of $('#tabs').children) b.classList.toggle('on', b.dataset.tab === name)
+  for (const p of document.querySelectorAll('.pane')) p.hidden = p.id !== `pane-${name}`
+  store.set('tab', name)
+}
+$('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) showTab(b.dataset.tab) })
+
+// ---------- chapters ----------
+function renderChapters() {
+  const list = current.chapters
+  $('#chapCount').textContent = list.length || ''
+  $('#genChapters').textContent = list.length ? 'Regenerate' : 'Generate'
+  $('#chapters').innerHTML = list.length ? list.map((c, i) => `<div class="item" data-t="${c.start}"><button class="ts" data-t="${c.start}">${fmt(c.start)}</button><div><div class="title" data-t="${c.start}">${esc(c.title)}</div>${c.summary ? `<div class="sum">${esc(c.summary)}</div>` : ''}</div><span></span></div>`).join('')
+    : `<p class="placeholder muted">No chapters yet. Generate them with the Claude model chosen at the top.</p>`
+  $('#chapNow').textContent = ''
+  lastChap = -1
+}
+$('#chapters').addEventListener('click', (e) => { const t = e.target.closest('[data-t]'); if (t) seek(+t.dataset.t) })
+$('#genChapters').onclick = async () => {
+  const btn = $('#genChapters'), status = $('#chapStatus'), id = current.manifest.id
+  btn.disabled = true; const started = Date.now()
+  const tick = setInterval(() => (status.textContent = `${$('#model').value} is reading the transcript… ${Math.round((Date.now() - started) / 1000)} s`), 500)
+  try {
+    const res = await api(`/api/videos/${id}/chapters`, { method: 'POST', body: JSON.stringify({ model: $('#model').value }) })
+    const body = await res.json()
+    if (!res.ok) throw new Error(body.error)
+    status.textContent = `${body.length} chapters by ${$('#model').value} in ${Math.round((Date.now() - started) / 1000)} s.`
+    if (current.manifest.id === id) { current.chapters = body; renderChapters(); renderTranscript(); runSearch(); renderTimeline() }
+  } catch (err) { status.innerHTML = `<span class="err">${esc(err.message)}</span>` }
+  finally { clearInterval(tick); btn.disabled = false }
+}
+
+// ---------- notes ----------
+function renderNotes() {
+  const list = current.notes
+  $('#noteCount').textContent = list.length || ''
+  $('#notes').innerHTML = list.length ? list.map((n) => `<div class="item" data-id="${n.id}"><button class="ts" data-t="${n.time}">${fmt(n.time)}</button><div class="text" contenteditable="plaintext-only" spellcheck="true">${esc(n.text)}</div><button class="del" title="Delete">×</button></div>`).join('')
+    : `<p class="placeholder muted">Write a note at the current time, bookmark it with ★ (or B), or save an answer from the chat.</p>`
+}
+async function saveNotes() {
+  const id = current.manifest.id
+  const res = await api(`/api/videos/${id}/notes`, { method: 'PUT', body: JSON.stringify({ notes: current.notes }) })
+  if (!res.ok) return toast('Could not save the notes.')
+  if (current.manifest.id === id) { current.notes = await res.json(); renderTimeline() }
+}
+async function addNote(time, text) {
+  current.notes.push({ id: Math.random().toString(36).slice(2, 10), time, text, createdAt: new Date().toISOString() })
+  current.notes.sort((a, b) => a.time - b.time)
+  renderNotes(); renderTimeline()
+  await saveNotes()
+  toast(text ? `Note saved at ${fmt(time)}` : `Bookmarked ${fmt(time)}`)
+}
+$('#noteForm').addEventListener('submit', (e) => { e.preventDefault(); const text = $('#noteText').value.trim(); $('#noteText').value = ''; addNote(player.currentTime || 0, text); $('#noteText').blur() })
+$('#noteText').addEventListener('keydown', (e) => { if (e.key === 'Escape') e.target.blur() })
+$('#bookmark').onclick = () => addNote(player.currentTime || 0, '')
+$('#noteAt').onclick = () => player.currentTime && seek(player.currentTime)
+$('#notes').addEventListener('click', (e) => {
+  const t = e.target.closest('.ts'); if (t) return seek(+t.dataset.t)
+  const del = e.target.closest('.del')
+  if (del) { const id = del.parentElement.dataset.id; current.notes = current.notes.filter((n) => n.id !== id); renderNotes(); saveNotes() }
+})
+$('#notes').addEventListener('focusout', (e) => {
+  const el = e.target.closest('.text'); if (!el) return
+  const note = current.notes.find((n) => n.id === el.parentElement.dataset.id)
+  if (note && note.text !== el.innerText.trim()) { note.text = el.innerText.trim(); saveNotes() }
+})
+
+$('#exportMd').onclick = () => {
+  const m = current.manifest
+  const lines = [`# ${m.title}`, '', `${fmt(m.duration)} · ${m.source}`, '']
+  if (current.chapters.length) lines.push('## Chapters', '', ...current.chapters.map((c) => `- **[${fmt(c.start)}]** ${c.title}${c.summary ? ` — ${c.summary}` : ''}`), '')
+  if (current.notes.length) lines.push('## Notes', '', ...current.notes.map((n) => `- **[${fmt(n.time)}]** ${n.text || '★'}`), '')
+  const conv = store.get(`chat:${m.id}`, { messages: [] }).messages.filter((x) => x.text)
+  if (conv.length) lines.push('## Conversation with Claude', '', ...conv.flatMap((x) => [x.role === 'user' ? `**You:** ${x.text}` : `**Claude:** ${x.text}`, '']))
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${m.title} - notes.md` })
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
+
+// ---------- chat ----------
+const scope = () => $('#scope').value
+const chatKey = () => (scope() === 'library' ? 'chat:*' : `chat:${current.manifest.id}`)
+function loadChat() { chat = store.get(chatKey(), { sessionId: null, messages: [] }); renderChat(); renderSuggestions() }
+$('#scope').addEventListener('change', () => {
+  if (abort) abort.abort()
+  store.set('scope', scope())
+  $('#question').placeholder = scope() === 'library' ? 'Ask about all your videos… (Enter to send)' : 'Ask about this video… (Enter to send)'
+  loadChat()
+})
+
+// "[3:07]", "[3:07–4:10]", and with a video label "[V2 3:07]".
+const TIME = '\\d{1,2}:\\d{2}(?::\\d{2})?'
+const TS = new RegExp(`\\[(?:(V\\d+)\\s+)?(${TIME})(?:\\s*[-–—]\\s*(?:V\\d+\\s+)?(${TIME}))?\\]`, 'g')
+function inline(s, labels) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
+    .replace(TS, (all, label, a, b) => {
+      const v = label ? labels?.[label] : ''
+      if (label && !v) return all
+      const name = label ? `${esc(videos.find((x) => x.id === v)?.title ?? label)} ` : ''
+      const btn = (t, text) => `<button class="ts" data-v="${v}" data-t="${parseT(t)}" title="${name}${t}">${text}</button>`
+      return btn(a, label ? `${label} ${a}` : a) + (b ? `–${btn(b, b)}<button class="cut" data-v="${v}" data-a="${parseT(a)}" data-b="${parseT(b)}" title="Clip this range">✂</button>` : '')
+    })
+}
+function markdown(src, labels) {
+  const out = []; let list = null, code = null
+  const close = () => { if (list) { out.push(`</${list}>`); list = null } }
+  for (const line of src.split('\n')) {
+    if (code !== null) { if (/^```/.test(line)) { out.push(`<pre><code>${esc(code)}</code></pre>`); code = null } else code += line + '\n'; continue }
+    if (/^```/.test(line)) { close(); code = ''; continue }
+    let m
+    if ((m = /^\s*[-*]\s+(.*)/.exec(line))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul' } out.push(`<li>${inline(m[1], labels)}</li>`) }
+    else if ((m = /^\s*\d+[.)]\s+(.*)/.exec(line))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol' } out.push(`<li>${inline(m[1], labels)}</li>`) }
+    else if ((m = /^#{1,6}\s+(.*)/.exec(line))) { close(); out.push(`<h4>${inline(m[1], labels)}</h4>`) }
+    else if (!line.trim()) close()
+    else { close(); out.push(`<p>${inline(line, labels)}</p>`) }
+  }
+  if (code !== null) out.push(`<pre><code>${esc(code)}</code></pre>`)
+  close()
+  return out.join('')
+}
+function framesFor(input) {
+  const frames = current?.manifest.frames ?? []
+  if (input?.videoId && input.videoId !== current?.manifest.id) return []
+  const limit = input?.limit ?? 4
+  if (input?.at) { const t = parseT(input.at); return [...frames].sort((a, b) => Math.abs(a.time - t) - Math.abs(b.time - t)).slice(0, limit).sort((a, b) => a.time - b.time) }
+  const from = input?.from ? parseT(input.from) : 0, to = input?.to ? parseT(input.to) : Infinity
+  const range = frames.filter((f) => f.time >= from && f.time <= to)
+  return range.length <= limit ? range : Array.from({ length: limit }, (_, i) => range[Math.round(i * (range.length - 1) / (limit - 1 || 1))])
+}
+function messageHtml(m, i) {
+  if (m.role === 'user') return esc(m.text)
+  const tools = m.tools?.length ? `<div class="tools">${m.tools.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''
+  const seen = m.frames?.length ? `<div class="seen" title="Frames Claude looked at">${m.frames.map((f) => `<img src="${frameUrl(m.videoId, f)}" data-v="${m.videoId}" data-t="${f.time}" title="${fmt(f.time)}">`).join('')}</div>` : ''
+  const err = m.error ? `<p class="err">${esc(m.error)}</p>` : ''
+  const save = m.text && !m.labels && i !== undefined ? `<button data-save="${i}">Save to notes</button>` : ''
+  const meta = m.meta || save ? `<div class="meta"><span>${esc(m.meta ?? '')}</span>${save}</div>` : ''
+  return tools + seen + markdown(m.text || '', m.labels) + err + meta
+}
+function renderChat() {
+  const box = $('#messages')
+  const intro = scope() === 'library'
+    ? 'Ask across every processed video: "in which meeting did they decide the deadline?". Answers link to the video and the moment.'
+    : 'Ask anything about this video. Claude reads the transcript, searches it, and can look at the screen. Times in answers are links.'
+  box.innerHTML = chat.messages.length ? chat.messages.map((m, i) => `<div class="msg ${m.role}">${messageHtml(m, i)}</div>`).join('') : `<p class="placeholder muted">${intro}</p>`
+  $('#chatBody').scrollTop = $('#chatBody').scrollHeight
+}
+function renderSuggestions() {
+  const now = () => fmt(player.currentTime || 0)
+  const items = scope() === 'library'
+    ? [['What is each video about?', () => 'What is each video about? One or two lines each.'], ['Where do they talk about…', () => null]]
+    : [
+      ['Summary', () => 'Summarize this video in a few bullet points, with the time of each.'],
+      ['Steps', () => 'List the steps it explains as a checklist, with the time of each step.'],
+      ['What is on screen now?', () => `What is shown on screen at [${now()}]? Look at the frames.`],
+      ['Explain this part', () => `Explain what is being said around [${now()}].`]
+    ]
+  $('#suggest').innerHTML = chat.messages.length ? '' : items.map(([label], i) => `<button data-i="${i}">${label}</button>`).join('')
+  $('#suggest').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return
+    const q = items[+b.dataset.i][1]()
+    if (q) ask(q); else { $('#question').value = 'In which videos do they talk about '; $('#question').focus() }
+  }
+}
+$('#messages').addEventListener('click', (e) => {
+  const save = e.target.closest('[data-save]')
+  if (save) {
+    const m = chat.messages[+save.dataset.save]
+    const first = new RegExp(`\\[(${TIME})`).exec(m.text)
+    addNote(first ? parseT(first[1]) : player.currentTime || 0, m.text)
+    return
+  }
+  const cut = e.target.closest('.cut')
+  if (cut) { const go = () => setClip(+cut.dataset.a, +cut.dataset.b); cut.dataset.v && cut.dataset.v !== current.manifest.id ? openVideo(cut.dataset.v).then(go) : go(); toast('Clip range set: export it under the player.'); return }
+  const t = e.target.closest('[data-t]')
+  if (t) { const v = t.dataset.v; v && v !== current.manifest.id ? openVideo(v, +t.dataset.t) : seek(+t.dataset.t) }
+})
+
+async function ask(question) {
+  if (!current || !question.trim() || abort) return
+  const library = scope() === 'library'
+  const key = chatKey(), conv = chat
+  conv.messages.push({ role: 'user', text: question })
+  const msg = { role: 'assistant', text: '', tools: [], frames: [], videoId: current.manifest.id }
+  conv.messages.push(msg)
+  renderChat(); renderSuggestions()
+  const el = $('#messages').lastElementChild
+  el.classList.add('typing')
+  setBusy(true)
+  abort = new AbortController()
+  const started = Date.now(), model = $('#model').value
+  const repaint = () => { if (conv !== chat) return; el.innerHTML = messageHtml(msg); const box = $('#chatBody'); if (box.scrollHeight - box.scrollTop - box.clientHeight < 120) box.scrollTop = box.scrollHeight }
+  try {
+    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ scope: library ? 'library' : 'video', videoId: current.manifest.id, question, model, sessionId: conv.sessionId }), signal: abort.signal })
+    if (!res.ok) throw new Error((await res.json()).error)
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '', paint = 0
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break
+      buf += dec.decode(value, { stream: true })
+      let nl
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line) continue
+        const ev = JSON.parse(line)
+        if (ev.type === 'session') conv.sessionId = ev.id
+        else if (ev.type === 'labels') msg.labels = ev.labels
+        else if (ev.type === 'text') msg.text += ev.text
+        else if (ev.type === 'turn' && msg.text && !msg.text.endsWith('\n\n')) msg.text += '\n\n'
+        else if (ev.type === 'tool') msg.tools.push(ev.name)
+        else if (ev.type === 'frames') for (const f of framesFor(ev.input)) if (!msg.frames.some((x) => x.file === f.file)) msg.frames.push(f)
+        else if (ev.type === 'done') { if (ev.error) msg.error = ev.error; msg.meta = `${model} · ${((ev.ms ?? Date.now() - started) / 1000).toFixed(1)}s${ev.cost ? ` · $${ev.cost.toFixed(4)}` : ''}` }
+      }
+      if (Date.now() - paint > 50) { repaint(); paint = Date.now() }
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') msg.error = err.message; else msg.meta = 'Stopped.'
+  } finally {
+    abort = null; setBusy(false)
+    msg.text = msg.text.trim()
+    store.set(key, conv)
+    if (conv === chat) renderChat()
+  }
+}
+function setBusy(busy) { $('#send').textContent = busy ? 'Stop' : 'Send' }
+$('#composer').addEventListener('submit', (e) => {
+  e.preventDefault()
+  if (abort) { abort.abort(); return }
+  const q = $('#question').value; $('#question').value = ''; autosize(); ask(q)
+})
+const autosize = () => { const q = $('#question'); q.style.height = 'auto'; q.style.height = Math.min(q.scrollHeight + 2, 160) + 'px' }
+$('#question').addEventListener('input', autosize)
+$('#question').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#composer').requestSubmit() } })
+$('#clearChat').onclick = () => { if (abort) abort.abort(); chat = { sessionId: null, messages: [] }; store.set(chatKey(), chat); renderChat(); renderSuggestions() }
+$('#model').addEventListener('change', (e) => store.set('model', e.target.value))
+
+// Select transcript text → ask about it, note it, or clip it.
+document.addEventListener('mouseup', (e) => setTimeout(() => {
+  if (e.target.closest('#selMenu')) return
+  const sel = getSelection(), text = sel.toString().trim(), menu = $('#selMenu')
+  if (!text || !sel.anchorNode || !$('#transcript').contains(sel.anchorNode)) { menu.style.display = 'none'; return }
+  const r = sel.getRangeAt(0).getBoundingClientRect()
+  menu.style.display = 'flex'; menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 260))}px`; menu.style.top = `${Math.max(8, r.top - 40)}px`
+  const segOf = (node) => (node.nodeType === 1 ? node : node.parentElement)?.closest('.seg')
+  const a = segOf(sel.anchorNode), b = segOf(sel.focusNode)
+  const idx = [a, b].filter(Boolean).map((el) => +el.dataset.i).sort((x, y) => x - y)
+  const start = idx.length ? current.segments[idx[0]].start : player.currentTime
+  const end = idx.length ? current.segments[idx[idx.length - 1]].end : start + 10
+  const done = () => { menu.style.display = 'none'; sel.removeAllRanges() }
+  $('#selAsk').onclick = () => { done(); showTab('chat'); if (scope() !== 'video') { $('#scope').value = 'video'; $('#scope').dispatchEvent(new Event('change')) } $('#question').value = `About this part [${fmt(start)}]: "${text}"\n\n`; autosize(); $('#question').focus() }
+  $('#selNote').onclick = () => { done(); showTab('notes'); addNote(start, `"${text}"`) }
+  $('#selClip').onclick = () => { done(); setClip(start, end); toast(`Clip ${fmt(start)}–${fmt(end)}: export it under the player.`) }
+}))
+
+// ---------- new video ----------
+let chosenFile = null
+function openNew() { chosenFile = null; $('#fileName').textContent = ''; $('#path').value = ''; $('#newErr').textContent = ''; $('#uploadBar').hidden = true; $('#newDialog').showModal() }
+$('#newBtn').onclick = openNew
+$('#cancelNew').onclick = () => $('#newDialog').close()
+const choose = (f) => { if (!f) return; chosenFile = f; $('#fileName').textContent = `${f.name} · ${(f.size / 1e6).toFixed(1)} MB`; $('#path').value = '' }
+$('#file').addEventListener('change', (e) => choose(e.target.files[0]))
+const drop = $('#drop')
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over') })
+drop.addEventListener('dragleave', () => drop.classList.remove('over'))
+drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); choose(e.dataTransfer.files[0]) })
+$('#path').addEventListener('input', () => { if ($('#path').value) { chosenFile = null; $('#fileName').textContent = '' } })
+
+function uploadFile(file) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `/api/upload?name=${encodeURIComponent(file.name)}`)
+    xhr.setRequestHeader('x-video-context', '1')
+    const bar = $('#uploadBar'); bar.hidden = false; bar.value = 0
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.value = (e.loaded / e.total) * 100 }
+    xhr.onload = () => { const body = JSON.parse(xhr.responseText); xhr.status === 200 ? resolve(body.path) : reject(new Error(body.error)) }
+    xhr.onerror = () => reject(new Error('Upload failed.'))
+    xhr.send(file)
+  })
+}
+$('#startNew').onclick = async () => {
+  const btn = $('#startNew'); btn.disabled = true; $('#newErr').textContent = ''
+  try {
+    let path = $('#path').value.trim()
+    if (chosenFile) path = await uploadFile(chosenFile)
+    if (!path) throw new Error('Choose a file or type a path.')
+    const res = await api('/api/process', { method: 'POST', body: JSON.stringify({ path, language: $('#language').value, model: $('#wmodel').value, engine: $('#engine').value || undefined, force: $('#force').checked }) })
+    const body = await res.json()
+    if (!res.ok) throw new Error(body.error)
+    $('#newDialog').close()
+    watchJobs()
+  } catch (err) { $('#newErr').textContent = err.message }
+  finally { btn.disabled = false }
+}
+
+let jobsTimer = null, knownDone = new Set()
+async function watchJobs() {
+  clearTimeout(jobsTimer)
+  const list = await (await api('/api/jobs')).json()
+  $('#jobs').innerHTML = list.filter((j) => j.error || j.progress.stage !== 'done').map((j) => `<span class="job ${j.error ? 'err' : ''}" title="${esc(j.error || j.progress.message)}">${esc(j.name)}: ${esc(j.error ? 'failed — ' + j.error.slice(0, 80) : j.progress.message)}</span>`).join('')
+  let finished = null
+  for (const j of list) if (j.progress.stage === 'done' && !j.error && !knownDone.has(j.id)) { knownDone.add(j.id); finished = j.id }
+  if (finished) await loadList(finished)
+  if (list.some((j) => !j.error && j.progress.stage !== 'done')) jobsTimer = setTimeout(watchJobs, 1000)
+}
+
+// ---------- start ----------
+;(async () => {
+  config = await (await api('/api/config')).json()
+  const model = $('#model')
+  model.innerHTML = config.claudeModels.map((m) => `<option>${m}</option>`).join('')
+  model.value = store.get('model', config.claudeModels[0])
+  if (!config.claude) { model.disabled = $('#genChapters').disabled = true; $('#question').placeholder = 'Install the claude CLI to chat: claude.com/claude-code' }
+  $('#wmodel').innerHTML = config.whisperModels.map((m) => `<option ${m === 'small' ? 'selected' : ''}>${m}</option>`).join('')
+  $('#engine').innerHTML += config.engines.map((m) => `<option>${m}</option>`).join('')
+  $('#scope').value = store.get('scope', 'video')
+  showTab(store.get('tab', 'chat'))
+  const jobs = await (await api('/api/jobs')).json()
+  for (const j of jobs) if (j.progress.stage === 'done') knownDone.add(j.id)
+  await loadList()
+  if (scope() === 'library') $('#scope').dispatchEvent(new Event('change'))
+  watchJobs()
+})()
+window.addEventListener('hashchange', () => { const id = location.hash.slice(1); if (id && id !== current?.manifest.id) openVideo(id) })
+</script>
+</body>
+</html>
