@@ -35,6 +35,8 @@ export interface ExportData extends ExportInfo {
   notes: Note[]
 }
 
+const escapeHtml = (text: string): string => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+
 /** A file or folder name from a title. */
 export function safeName(title: string): string {
   return title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 100) || 'video'
@@ -68,6 +70,8 @@ export function exportArchive(id: string, page: string): { name: string; entries
   // Marked as exported in the HTML itself, so that what needs the server is hidden even before (or without) the script.
   const html = page
     .replace('<html lang="en">', '<html lang="en" class="static">')
+    .replace('<span id="videoTitle"></span>', `<span id="videoTitle">${escapeHtml(m.title)}</span>`)
+    .replace('<title>video-context</title>', `<title>${escapeHtml(m.title)} — video-context</title>`)
     .replace('<!-- video-context:export -->', `<script>window.VIDEO_CONTEXT_EXPORT = ${json}</script>`)
   const at = (name: string): string => posix.join(folder, name)
   const entries: ZipInput[] = [
