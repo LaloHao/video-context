@@ -24,8 +24,12 @@ calls them in this order:
 5. **`get_frames`** `{ videoId, at? | from?, to?, limit? }` — up to 8 key frames as images,
    each with the text read on it. `at` gives the frames closest to a time; `from`/`to`
    spreads them over a range.
-6. **`list_videos`**, **`list_frames`** — what is processed, and when each frame is.
-7. **`search_videos`** `{ query, limit? }` — the same search over every processed video at
+6. **`get_screen`** `{ videoId, at }` — the exact screen at one time (`"3:15"`) or up to 8
+   (`["3:05", "3:15"]`), taken from the video file, each as an image with its text (OCR). For
+   what the key frames miss: code or text typed little by little, a form being filled, a
+   dialog. Needs the video file where it was processed.
+7. **`list_videos`**, **`list_frames`** — what is processed, and when each frame is.
+8. **`search_videos`** `{ query, limit? }` — the same search over every processed video at
    once: which videos say or show it, and when (*"in which meeting did they talk about…"*).
 
 ## Claude Code

@@ -13,6 +13,7 @@ import { z } from 'zod'
 import { ENGINES, MODELS, type ModelName } from './deps.js'
 import { framesAround, framesBetween, searchScreen } from './frames.js'
 import { searchLibrary } from './library.js'
+import { screenAt } from './screen.js'
 import { listVideos, loadVideo, processVideo, videoId, type Progress } from './process.js'
 import { formatTime, parseTime } from './time.js'
 import { fold, rangeText, searchSegments } from './transcript.js'
@@ -186,6 +187,35 @@ server.registerTool(
       const onScreen = frame.text ? `\nText on screen (OCR, may have errors):\n${frame.text.slice(0, 1500)}` : ''
       content.push({ type: 'text', text: `Frame at ${formatTime(frame.time)}:${onScreen}` })
       content.push({ type: 'image', mimeType: 'image/jpeg', data: readFileSync(join(video.dir, frame.file)).toString('base64') })
+    }
+    return { content }
+  }
+)
+
+server.registerTool(
+  'get_screen',
+  {
+    description: `The screen at exact times, taken from the video file: any moment, not only the key frames. Use it to read what changes little by little between key frames — code or text being typed, a form being filled, a dialog — or when the key frames around a time do not show what was said. At most ${MAX_FRAMES} times per call.`,
+    inputSchema: {
+      videoId: z.string(),
+      at: z.union([z.string(), z.array(z.string()).min(1).max(MAX_FRAMES)]).describe('A time like "3:15", or several: ["3:05", "3:15", "3:25"].')
+    }
+  },
+  async ({ videoId: id, at }) => {
+    const video = loadVideo(id)
+    if (!video) return fail(`Video ${id} is not processed (yet).`)
+    const times = (Array.isArray(at) ? at : [at]).map((t) => parseTime(t))
+    if (times.some((t) => t === null)) return fail('Times look like "3:15", "1:02:03" or a number of seconds.')
+    const content: Content[] = []
+    try {
+      for (const time of times as number[]) {
+        const screen = await screenAt(id, time)
+        const onScreen = screen.text ? `\nText on screen (OCR, may have errors):\n${screen.text.slice(0, 1500)}` : ''
+        content.push({ type: 'text', text: `Screen at ${formatTime(screen.time)}:${onScreen}` })
+        content.push({ type: 'image', mimeType: 'image/jpeg', data: readFileSync(join(video.dir, screen.file)).toString('base64') })
+      }
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error))
     }
     return { content }
   }

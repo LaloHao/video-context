@@ -15,6 +15,7 @@ import { parseArgs } from 'node:util'
 
 import { ENGINES, findBinary, homeDir, MODELS, type Engine, type ModelName } from './deps.js'
 import { exportArchive, importArchive } from './export.js'
+import { screenAt } from './screen.js'
 import { Log } from './log.js'
 import { writeZip } from './zip.js'
 import { cleanChapters, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
@@ -99,7 +100,7 @@ function sendFile(req: IncomingMessage, res: ServerResponse, file: string): void
   createReadStream(file).pipe(res)
 }
 
-const VIDEO_TOOLS = ['search_transcript', 'get_transcript', 'get_frames', 'list_frames', 'list_videos', 'search_videos']
+const VIDEO_TOOLS = ['search_transcript', 'get_transcript', 'get_frames', 'get_screen', 'list_frames', 'list_videos', 'search_videos']
 
 function claudeBinary(): string | null {
   return findBinary('VIDEO_CONTEXT_CLAUDE', ['claude'])
@@ -125,7 +126,7 @@ function videoPrompt(id: string): string {
     `The user is watching the video "${m.title}" (${formatTime(m.duration)}, video id ${m.id}) in a player next to its transcript, and asks you about it.`,
     'Answer in the language the user writes in. Be concise.',
     'Cite the moments you rely on as [m:ss] or [h:mm:ss] (for example [3:07]), or a range as [3:07–4:10]: the page turns them into links that seek the player there. Cite generously.',
-    `The MCP tools of the video-context server work on this video with id "${m.id}": search_transcript finds where something is said or shown on screen, get_frames shows you the screen at a time (use it when the question is about something visual), get_transcript reads a range. search_videos searches every other processed video too.`,
+    `The MCP tools of the video-context server work on this video with id "${m.id}": search_transcript finds where something is said or shown on screen, get_frames shows you the key frames around a time (use it when the question is about something visual), get_screen shows the exact screen at any times, from the video file (use it to read code or text typed between key frames, or to look closer at a moment), get_transcript reads a range. search_videos searches every other processed video too.`,
     chapters && `Chapters: ${chapters}`,
     notes.length > 0 && `The user's notes on this video:\n${notes.map((n) => `[${formatTime(n.time)}] ${n.text}`).join('\n')}`,
     inline ? `The whole transcript:\n\n${transcript}` : 'The transcript is long: read it with get_transcript and search_transcript.'
@@ -148,7 +149,7 @@ function libraryPrompt(): { prompt: string; labels: Record<string, string> } {
     'The user asks about their library of processed videos (recordings of meetings, trainings, screencasts):',
     lines.join('\n'),
     'Answer in the language the user writes in. Be concise.',
-    'Find which videos talk about something with the search_videos tool, then dig into one with search_transcript, get_transcript or get_frames and its video id.',
+    'Find which videos talk about something with the search_videos tool, then dig into one with search_transcript, get_transcript, get_frames (its key frames) or get_screen (the exact screen at any time) and its video id.',
     'Cite every moment you rely on with the video label and the time, as [V2 3:07] or a range as [V2 3:07–4:10]: the page turns them into links that open that video there. Never cite a time without its label.'
   ].join('\n\n')
   return { prompt, labels }
@@ -213,8 +214,10 @@ function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, un
         else if (e.type === 'message_start') send({ type: 'turn' })
       } else if (msg.type === 'assistant') {
         // Which frames Claude looked at, so the page can show them.
-        for (const block of msg.message?.content ?? [])
+        for (const block of msg.message?.content ?? []) {
           if (block.type === 'tool_use' && /get_frames$/.test(block.name)) send({ type: 'frames', input: block.input })
+          if (block.type === 'tool_use' && /get_screen$/.test(block.name)) send({ type: 'screens', input: block.input })
+        }
       } else if (msg.type === 'result') {
         answered = true
         const error = msg.is_error ? claudeHint(String(msg.result ?? 'Claude failed.')) : undefined
@@ -432,6 +435,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return json(res, 200, readNotes(video.dir))
     }
     if (req.method === 'GET' && parts[3] === 'clip') return clip(req, res, video.manifest.id, url)
+    if (req.method === 'GET' && parts[3] === 'screen') {
+      const time = Number(url.searchParams.get('t'))
+      if (!Number.isFinite(time) || time < 0) return json(res, 400, { error: 'A time in seconds is needed.' })
+      const screen = await screenAt(video.manifest.id, time, { ocr: false })
+      return sendFile(req, res, join(video.dir, screen.file))
+    }
     if (req.method === 'GET' && parts[3] === 'export') {
       // Streamed as it is written: a large video is never copied first.
       const { name, entries } = exportArchive(video.manifest.id, readFileSync(PAGE, 'utf8'))

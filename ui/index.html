@@ -112,9 +112,15 @@ label.check { display: flex; align-items: center; gap: 4px; font-size: 12.5px; u
 .msg.assistant p { margin: 0 0 8px; }
 .msg.assistant ul, .msg.assistant ol { margin: 0 0 8px; padding-left: 20px; }
 .msg.assistant code { font: 12.5px var(--mono); background: var(--bg); padding: 1px 4px; border-radius: 4px; }
-.msg.assistant pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; }
+.msg.assistant pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.assistant pre code { background: none; padding: 0; }
 .msg.assistant h4 { margin: 10px 0 4px; font-size: 14px; }
+.msg.assistant .md-table { overflow-x: auto; margin: 0 0 8px; }
+.msg.assistant table.md { border-collapse: collapse; font-size: 13px; width: 100%; overflow-wrap: normal; }
+.msg.assistant table.md code { white-space: nowrap; }
+.msg.assistant table.md th, .msg.assistant table.md td { border: 1px solid var(--line); padding: 3px 6px; vertical-align: top; text-align: left; }
+.msg.assistant table.md th { background: var(--bg); font-weight: 600; }
+.seen .more { height: 44px; min-width: 44px; border: 1px dashed var(--line); border-radius: 4px; background: none; color: var(--muted); font-size: 12px; }
 .ts { font: 12.5px var(--mono); background: var(--accent-soft); color: var(--accent); border: 0; border-radius: 4px; padding: 0 4px; }
 .ts:hover { background: var(--accent); color: #fff; }
 .cut { border: 0; background: none; padding: 0 2px; font-size: 12px; opacity: .7; }
@@ -123,6 +129,7 @@ label.check { display: flex; align-items: center; gap: 4px; font-size: 12.5px; u
 .tools span { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
 .seen { display: flex; gap: 4px; margin: 4px 0 8px; flex-wrap: wrap; }
 .seen img { height: 44px; border-radius: 4px; cursor: pointer; border: 1px solid var(--line); }
+.seen img.exact { border-color: var(--accent); }
 .meta { font-size: 11.5px; color: var(--muted); margin-top: 4px; display: flex; gap: 10px; align-items: center; }
 .meta button { background: none; border: 0; color: var(--accent); padding: 0; font-size: 11.5px; }
 .typing::after { content: "▍"; animation: blink 1s steps(2) infinite; color: var(--accent); }
@@ -768,15 +775,49 @@ function inline(s, labels) {
       return btn(a, label ? `${label} ${a}` : a) + (b ? `–${btn(b, b)}<button class="cut" data-v="${v}" data-a="${parseT(a)}" data-b="${parseT(b)}" title="Clip this range">✂</button>` : '')
     })
 }
+// A Markdown table row: its cells. A pipe inside `code`, or written "\|", is not a border.
+function cells(line) {
+  const row = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+  const out = []; let cell = '', inCode = false
+  for (let i = 0; i < row.length; i++) {
+    const c = row[i]
+    if (c === '\\' && row[i + 1] === '|') { cell += '|'; i++; continue }
+    if (c === '`') inCode = !inCode
+    if (c === '|' && !inCode) { out.push(cell.trim()); cell = ''; continue }
+    cell += c
+  }
+  return [...out, cell.trim()]
+}
 function markdown(src, labels) {
-  const out = []; let list = null, code = null
-  const close = () => { if (list) { out.push(`</${list}>`); list = null } }
+  const out = []; let list = null, code = null, table = null, fence = 0
+  const closeTable = () => {
+    if (!table) return
+    const [head, ...body] = table
+    out.push(`<div class="md-table"><table class="md"><thead><tr>${head.map((c) => `<th>${inline(c, labels)}</th>`).join('')}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${inline(c, labels)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`)
+    table = null
+  }
+  // Bullets indented under an item are a list inside it; a numbered list that resumes after them keeps counting.
+  let sub = false
+  const closeSub = () => { if (sub) { out.push('</ul>'); sub = false } }
+  const close = () => { closeTable(); closeSub(); if (list) { out.push(`</${list}>`); list = null } }
   for (const line of src.split('\n')) {
-    if (code !== null) { if (/^```/.test(line)) { out.push(`<pre><code>${esc(code)}</code></pre>`); code = null } else code += line + '\n'; continue }
-    if (/^```/.test(line)) { close(); code = ''; continue }
+    // A fence may be indented (inside a list item): its lines lose that indent.
+    if (code !== null) { if (/^\s*```/.test(line)) { out.push(`<pre><code>${esc(code)}</code></pre>`); code = null } else code += line.slice(Math.min(fence, line.search(/\S|$/))) + '\n'; continue }
+    if (/^\s*```/.test(line)) { closeTable(); fence = line.search(/\S/); code = ''; continue }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      if (!table) { close(); table = [] }
+      // The |---|---| line under the header is only a separator.
+      if (!/^\s*\|[\s:|-]+\|\s*$/.test(line)) table.push(cells(line))
+      continue
+    }
+    closeTable()
     let m
-    if ((m = /^\s*[-*]\s+(.*)/.exec(line))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul' } out.push(`<li>${inline(m[1], labels)}</li>`) }
-    else if ((m = /^\s*\d+[.)]\s+(.*)/.exec(line))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol' } out.push(`<li>${inline(m[1], labels)}</li>`) }
+    if ((m = /^(\s*)[-*]\s+(.*)/.exec(line))) {
+      if (m[1].length >= 2 && list) { if (!sub) { out.push('<ul>'); sub = true } }
+      else { closeSub(); if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul' } }
+      out.push(`<li>${inline(m[2], labels)}</li>`)
+    }
+    else if ((m = /^\s*(\d+)[.)]\s+(.*)/.exec(line))) { closeSub(); if (list !== 'ol') { close(); out.push(`<ol start="${m[1]}">`); list = 'ol' } out.push(`<li>${inline(m[2], labels)}</li>`) }
     else if ((m = /^#{1,6}\s+(.*)/.exec(line))) { close(); out.push(`<h4>${inline(m[1], labels)}</h4>`) }
     else if (!line.trim()) close()
     else { close(); out.push(`<p>${inline(line, labels)}</p>`) }
@@ -797,7 +838,13 @@ function framesFor(input) {
 function messageHtml(m, i) {
   if (m.role === 'user') return esc(m.text)
   const tools = m.tools?.length ? `<div class="tools">${m.tools.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''
-  const seen = m.frames?.length ? `<div class="seen" title="Frames Claude looked at">${m.frames.map((f) => `<img src="${frameUrl(m.videoId, f)}" data-v="${m.videoId}" data-t="${f.time}" title="${fmt(f.time)}">`).join('')}</div>` : ''
+  const frames = (m.frames ?? []).map((f) => `<img src="${frameUrl(m.videoId, f)}" data-v="${m.videoId}" data-t="${f.time}" title="Key frame at ${fmt(f.time)}">`)
+  const unique = [...new Map((m.screens ?? []).map((x) => [`${x.v}@${x.t}`, x])).values()].sort((a, b) => (a.v === b.v ? a.t - b.t : 0))
+  const screens = EXPORT ? [] : unique.map((x) => `<img class="exact" src="/api/videos/${x.v}/screen?t=${x.t}" data-v="${x.v}" data-t="${x.t}" title="The screen at exactly ${fmt(x.t)}">`)
+  // Many screens: the first ones, and the rest on a click.
+  const all = [...frames, ...screens], SHOW = 8
+  const thumbs = all.length > SHOW + 1 ? [...all.slice(0, SHOW), `<button class="more" data-more title="Show all ${all.length}">+${all.length - SHOW}</button><span hidden>${all.slice(SHOW).join('')}</span>`] : all
+  const seen = all.length ? `<div class="seen" title="What Claude looked at: key frames, and exact screens (orange)">${thumbs.join('')}</div>` : ''
   const err = m.error ? `<p class="err">${esc(m.error)} <a href="#" data-logs="chat">See the logs</a></p>` : ''
   const save = m.text && !m.labels && i !== undefined ? `<button data-save="${i}">Save to notes</button>` : ''
   const meta = m.meta || save ? `<div class="meta"><span>${esc(m.meta ?? '')}</span>${save}</div>` : ''
@@ -829,6 +876,8 @@ function renderSuggestions() {
   }
 }
 $('#messages').addEventListener('click', (e) => {
+  const more = e.target.closest('[data-more]')
+  if (more) { more.nextElementSibling.replaceWith(...more.nextElementSibling.childNodes); more.remove(); return }
   const logsLink = e.target.closest('[data-logs]')
   if (logsLink) { e.preventDefault(); return openLogs({ source: logsLink.dataset.logs }) }
   const save = e.target.closest('[data-save]')
@@ -875,6 +924,11 @@ async function ask(question) {
         else if (ev.type === 'turn' && msg.text && !msg.text.endsWith('\n\n')) msg.text += '\n\n'
         else if (ev.type === 'tool') msg.tools.push(ev.name)
         else if (ev.type === 'frames') { for (const f of framesFor(ev.input)) if (!msg.frames.some((x) => x.file === f.file)) msg.frames.push(f) }
+        else if (ev.type === 'screens') {
+          // Exact screens taken from the video: shown with the key frames, by their time.
+          const v = ev.input?.videoId ?? current.manifest.id
+          for (const at of [ev.input?.at ?? []].flat()) { const t = parseT(at); if (Number.isFinite(t)) (msg.screens ??= []).push({ v, t }) }
+        }
         else if (ev.type === 'done') { if (ev.error) msg.error = ev.error; msg.meta = `${model} · ${((ev.ms ?? Date.now() - started) / 1000).toFixed(1)}s${ev.cost ? ` · $${ev.cost.toFixed(4)}` : ''}` }
       }
       if (Date.now() - paint > 50) { repaint(); paint = Date.now() }
