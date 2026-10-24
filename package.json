@@ -1,6 +1,6 @@
 {
   "name": "@lalohao/video-context",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Turn a video into context an AI agent can use: a local timestamped transcript (whisper.cpp or mlx-whisper), key frames (ffmpeg) and an MCP server to search and read them.",
   "keywords": [
     "mcp",
