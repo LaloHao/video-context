@@ -3,6 +3,7 @@
 // progress of every stage, can be canceled, retried or moved to the front, and
 // the queue is saved so that a restart picks up where it was.
 
+import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
@@ -42,22 +43,60 @@ export interface Job {
   /** It was processed before: nothing was done again. */
   cached?: boolean
   error?: string
+  /** The tools started for it (the newest), to stop them if the server dies halfway. */
+  pids?: number[]
 }
 
 export type Runner = (path: string, opts: ProcessOptions) => Promise<ProcessedVideo>
 
+export interface QueueOptions {
+  /** Where the queue is saved. */
+  file?: string
+  log?: (level: 'info' | 'warn' | 'error', message: string, detail?: string) => void
+  /** Stop the tools a job left running when the server died; returns those stopped. */
+  stopLeftovers?: (pids: number[]) => number[]
+}
+
 /** Finished jobs kept in the list (the newest). */
 const KEEP_FINISHED = 30
+/** Process ids kept per job: the tools running now are among the last ones started. */
+const KEEP_PIDS = 20
+
+/** The tools processVideo runs: only a process with one of these names is stopped. */
+const TOOL = /(^|\/)(ffmpeg|ffprobe|whisper[\w.-]*|mlx_whisper|tesseract)(\s|$)/
+
+/** Stop the processes in `pids` that are still one of the tools (a process id can be reused by anything once its process ended). */
+export function stopLeftovers(pids: number[]): number[] {
+  if (process.platform === 'win32') return []
+  const stopped: number[] = []
+  for (const pid of pids) {
+    const ps = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+    if (ps.status !== 0 || !TOOL.test(ps.stdout.trim())) continue
+    try {
+      process.kill(pid, 'SIGKILL')
+      stopped.push(pid)
+    } catch {
+      /* it ended meanwhile */
+    }
+  }
+  return stopped
+}
 
 export class Queue {
   private jobs: Job[] = []
   private running: { job: Job; abort: AbortController } | null = null
 
+  private readonly file?: string
+  private readonly log: NonNullable<QueueOptions['log']>
+  private readonly stopLeftovers: NonNullable<QueueOptions['stopLeftovers']>
+
   constructor(
     private readonly run: Runner,
-    private readonly file?: string,
-    private readonly onFinished?: (job: Job) => void
+    options: QueueOptions = {}
   ) {
+    this.file = options.file
+    this.log = options.log ?? (() => {})
+    this.stopLeftovers = options.stopLeftovers ?? stopLeftovers
     this.load()
     this.pump()
   }
@@ -76,6 +115,7 @@ export class Queue {
     if (pending) return pending
     const job: Job = { id: randomUUID(), videoId, path, name: basename(path), options, state: 'queued', addedAt: Date.now() }
     this.jobs.push(job)
+    this.log('info', `Added ${job.name}`, `${path}\n${JSON.stringify(options)}`)
     this.changed()
     this.pump()
     return job
@@ -88,6 +128,7 @@ export class Queue {
     if (job.state === 'queued') {
       this.finish(job, 'canceled')
     } else if (job.state === 'running' && this.running?.job === job) {
+      this.log('info', `Canceling ${job.name}`)
       this.running.abort.abort()
     }
     return job
@@ -136,14 +177,26 @@ export class Queue {
     if (!job) return
     const abort = new AbortController()
     this.running = { job, abort }
-    Object.assign(job, { state: 'running', startedAt: Date.now(), stage: undefined, message: 'Starting…', transcribe: undefined, transcribeStartedAt: undefined, frames: undefined, ocr: undefined, error: undefined, cached: undefined })
+    Object.assign(job, { state: 'running', startedAt: Date.now(), stage: undefined, message: 'Starting…', transcribe: undefined, transcribeStartedAt: undefined, frames: undefined, ocr: undefined, error: undefined, cached: undefined, pids: [] })
     this.changed()
+    this.log('info', `Processing ${job.name}`)
     let reported = false
+    const logged = new Set<string>()
     this.run(job.path, {
       ...job.options,
       signal: abort.signal,
+      onSpawn: (pid) => {
+        job.pids = [...(job.pids ?? []), pid].slice(-KEEP_PIDS)
+        this.changed()
+      },
       onProgress: (p) => {
         reported = true
+        // Each step once in the log (the transcription and the OCR take turns), with what it said
+        // first ("Audio kept from the last attempt.").
+        if (!logged.has(p.stage)) {
+          logged.add(p.stage)
+          this.log('info', `${job.name}: ${p.message}`)
+        }
         job.stage = p.stage
         job.message = p.message
         if (p.stage === 'transcribe') {
@@ -166,7 +219,11 @@ export class Queue {
   private finish(job: Job, state: JobState, error?: string): void {
     job.state = state
     job.finishedAt = Date.now()
+    job.pids = undefined
     if (error) job.error = error
+    if (state === 'failed') this.log('error', `Failed: ${job.name}`, error)
+    else if (state === 'canceled') this.log('warn', `Canceled: ${job.name}`)
+    else this.log('info', job.cached ? `Already processed: ${job.name}` : `Ready: ${job.name} (${Math.round(((job.finishedAt ?? 0) - (job.startedAt ?? 0)) / 1000)} s)`)
     if (state === 'done') Object.assign(job, { stage: 'done', message: job.cached ? 'Already processed.' : 'Done.' })
     if (this.running?.job === job) this.running = null
     // Only the newest finished jobs stay in the list.
@@ -174,7 +231,6 @@ export class Queue {
     const drop = new Set(finished.sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0)).slice(KEEP_FINISHED))
     this.jobs = this.jobs.filter((j) => !drop.has(j))
     this.changed()
-    this.onFinished?.(job)
     this.pump()
   }
 
@@ -182,8 +238,14 @@ export class Queue {
     if (!this.file || !existsSync(this.file)) return
     try {
       const saved = JSON.parse(readFileSync(this.file, 'utf8')) as Job[]
-      // A job that was running when the server stopped starts again.
-      this.jobs = saved.map((j) => (j.state === 'running' ? { ...j, state: 'queued', startedAt: undefined, message: undefined } : j))
+      // A job that was running when the server stopped starts again (from the steps it finished),
+      // once the tools it left running are stopped.
+      this.jobs = saved.map((j) => {
+        if (j.state !== 'running') return j
+        const stopped = j.pids?.length ? this.stopLeftovers(j.pids) : []
+        this.log('warn', `${j.name} was processing when the server stopped: it starts again from the steps it finished`, stopped.length ? `Stopped the tools it left running: ${stopped.join(', ')}` : undefined)
+        return { ...j, state: 'queued' as const, startedAt: undefined, message: undefined, pids: undefined }
+      })
     } catch {
       this.jobs = []
     }

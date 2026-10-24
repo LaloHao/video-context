@@ -90,6 +90,25 @@ A video already processed is ready at once. A message says when each video is re
 opens it if none is open). The queue is kept in `~/.cache/video-context/queue.json`: if the
 page's server stops, the video that was processing starts again, and the rest wait their turn.
 
+A video that stopped halfway (the server died or was closed, or it was canceled) does not
+start over: the steps it finished are kept in its folder until it is done — the audio, the
+transcript, the key frames and their text — and only the rest is done again, as long as the
+language, the model and the engine are the same. A transcription stopped in the middle is
+done again from its start. If the server died, the tools it left running (ffmpeg, whisper)
+are stopped when it starts again.
+
+## Logs
+
+The **Logs** button at the top (or `Shift+L`) opens what the server did and what failed:
+processing steps, chapters, chat questions, clips and uploads. A red count says how many
+errors are new. Filter by level, by source or by text; an entry with details (Claude's
+answer, a tool's error output) opens with a click, and **Copy** takes the entries shown.
+Errors in the page link to their entries ("See the logs"). Everything is also written to
+`~/.cache/video-context/logs/ui.log`.
+
+When Claude cannot answer, the error says why, and what to do when it can be fixed: an expired
+session is solved with `claude auth login` in a terminal.
+
 ## Keys
 
 | Key | Does |
@@ -101,6 +120,7 @@ page's server stops, the video that was processing starts again, and the rest wa
 | `B` | Bookmark this time |
 | `[` / `]` | Clip start / end at this time |
 | `Q` | Open or close the queue |
+| `Shift+L` | Open or close the logs |
 
 ## Privacy
 

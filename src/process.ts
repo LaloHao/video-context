@@ -32,6 +32,8 @@ export interface ProcessOptions {
   /** Process again even when a result exists. */
   force?: boolean
   onProgress?(progress: Progress): void
+  /** Each external tool started (ffmpeg, whisper, tesseract), so that a caller can stop them if it dies. */
+  onSpawn?(pid: number): void
   signal?: AbortSignal
 }
 
@@ -105,10 +107,11 @@ export function listVideos(): Manifest[] {
 function run(
   command: string,
   args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; onStderr?: (chunk: string) => void } = {}
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; onSpawn?: (pid: number) => void; onStderr?: (chunk: string) => void } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd: opts.cwd, env: opts.env, stdio: ['ignore', 'pipe', 'pipe'], signal: opts.signal })
+    if (child.pid) opts.onSpawn?.(child.pid)
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (d: Buffer) => (stdout += d.toString()))
@@ -126,13 +129,14 @@ function run(
   })
 }
 
-async function duration(tools: Tools, file: string, signal?: AbortSignal): Promise<number> {
-  const { stdout } = await run(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], { signal })
+async function duration(tools: Tools, file: string, opts: ProcessOptions): Promise<number> {
+  const { signal, onSpawn } = opts
+  const { stdout } = await run(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], { signal, onSpawn })
   let seconds = Number(stdout.trim())
   if (!Number.isFinite(seconds)) {
     // WebM files from a browser's MediaRecorder have no duration in their header:
     // read the packets through without decoding and take the last time reached.
-    const { stderr } = await run(tools.ffmpeg, ['-hide_banner', '-i', file, '-map', '0', '-c', 'copy', '-f', 'null', '-'], { signal })
+    const { stderr } = await run(tools.ffmpeg, ['-hide_banner', '-i', file, '-map', '0', '-c', 'copy', '-f', 'null', '-'], { signal, onSpawn })
     seconds = lastProgressTime(stderr) ?? Number.NaN
   }
   if (!Number.isFinite(seconds)) throw new Error('Could not read the video duration: is it a video file?')
@@ -169,16 +173,23 @@ async function transcribe(tools: Tools, model: string, dir: string, language: st
       if (/frames/.test(text)) transcribing(text)
       else if (/\d+%\|/.test(text)) opts.onProgress?.({ stage: 'model', message: 'Fetching the mlx-whisper model (downloaded once)…' })
     }
-    await run(tools.whisper, args, { cwd: dir, env, signal: opts.signal, onStderr })
-    return parseMlxJson(JSON.parse(readFileSync(join(dir, 'whisper.json'), 'utf8')))
+    await run(tools.whisper, args, { cwd: dir, env, signal: opts.signal, onSpawn: opts.onSpawn, onStderr })
+    return readWhisper(tools.engine, dir)
   }
   const threads = String(Math.max(1, Math.min(16, availableParallelism() - 2)))
   await run(tools.whisper, ['-m', model, '-l', language, '-t', threads, '-f', 'audio.wav', '-oj', '-of', 'whisper', '-pp'], {
     cwd: dir,
     signal: opts.signal,
+    onSpawn: opts.onSpawn,
     onStderr: onTranscribeProgress(opts, /progress\s*=\s*(\d+)%/g)
   })
-  return parseWhisperJson(JSON.parse(readFileSync(join(dir, 'whisper.json'), 'utf8')))
+  return readWhisper(tools.engine, dir)
+}
+
+/** The segments of the whisper.json an engine wrote. */
+function readWhisper(engine: Engine, dir: string): Segment[] {
+  const raw = JSON.parse(readFileSync(join(dir, 'whisper.json'), 'utf8')) as unknown
+  return engine === 'mlx' ? parseMlxJson(raw) : parseWhisperJson(raw)
 }
 
 /** Key frames: scene changes plus one every `frameEvery` s, near-duplicates dropped. One ffmpeg pass writes them and a 9×8 gray thumbnail of each. */
@@ -199,7 +210,7 @@ async function extractFrames(tools: Tools, file: string, dir: string, opts: Proc
       '-map', '[big]', '-fps_mode', 'vfr', '-q:v', '4', join(framesDir, '%05d.jpg'),
       '-map', '[small]', '-fps_mode', 'vfr', '-f', 'rawvideo', thumbs
     ],
-    { signal: opts.signal, onStderr: (text) => (log += text) }
+    { signal: opts.signal, onSpawn: opts.onSpawn, onStderr: (text) => (log += text) }
   )
   const times = parseShowinfoTimes(log)
   const files = readdirSync(framesDir).filter((f) => f.endsWith('.jpg')).sort()
@@ -233,7 +244,7 @@ async function readScreens(dir: string, frames: Frame[], language: string, opts:
   let done = 0
   await mapLimit(frames, 4, async (frame) => {
     try {
-      const text = await ocrImage(bin, join(dir, frame.file), languages, opts.signal)
+      const text = await ocrImage(bin, join(dir, frame.file), languages, opts.signal, opts.onSpawn)
       if (text) frame.text = text
     } catch {
       /* one unreadable frame does not stop the rest */
@@ -242,6 +253,34 @@ async function readScreens(dir: string, frames: Frame[], language: string, opts:
     opts.onProgress?.({ stage: 'ocr', percent: Math.round((done / frames.length) * 100), message: `Reading text on screen… ${done}/${frames.length}` })
   })
   return { engine: 'tesseract', languages }
+}
+
+/**
+ * What a run that did not finish leaves for the next one: the steps done, and
+ * the settings they were done with. A run with other settings starts over.
+ */
+interface Unfinished {
+  settings: string
+  /** audio.wav is complete. */
+  audio?: boolean
+  /** whisper.json is complete. */
+  transcript?: boolean
+  /** The key frames, once extracted (with their text once `ocr` is set). */
+  frames?: { frames: Frame[]; dropped: number }
+  ocr?: Manifest['ocr']
+}
+
+const UNFINISHED = 'unfinished.json'
+
+function readUnfinished(dir: string, settings: string): Unfinished {
+  try {
+    const saved = JSON.parse(readFileSync(join(dir, UNFINISHED), 'utf8')) as Unfinished
+    if (saved.settings === settings) return saved
+  } catch {
+    /* none, or unreadable: start over */
+  }
+  for (const name of ['audio.wav', 'whisper.json', UNFINISHED]) rmSync(join(dir, name), { force: true })
+  return { settings }
 }
 
 /** Process `file` (or return the cached result). Throws with a readable message when a tool is missing or fails. */
@@ -258,23 +297,73 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
   mkdirSync(dir, { recursive: true })
   rmSync(join(dir, 'manifest.json'), { force: true })
   const abs = resolve(file)
-  const seconds = await duration(tools, abs, opts.signal)
+  const seconds = await duration(tools, abs, opts)
   const language = opts.language ?? 'auto'
   const modelName = opts.model ?? 'small'
+
+  // An earlier run that stopped halfway (the server died, it was canceled) left the steps it finished.
+  const settings = JSON.stringify([language, modelName, tools.engine, opts.sceneThreshold ?? 0.25, opts.frameEvery ?? 60, opts.dedupeThreshold ?? 4, opts.ocr !== false])
+  const unfinished = readUnfinished(dir, settings)
+  const save = (): void => writeFileSync(join(dir, UNFINISHED), JSON.stringify(unfinished))
+  save()
 
   // whisper.cpp's model is downloaded here; mlx_whisper fetches its own (Hugging Face cache) the first time.
   opts.onProgress?.({ stage: 'model', message: `${tools.engine}, whisper model "${modelName}"` })
   const model = tools.engine === 'mlx' ? mlxModel(modelName) : await ensureModel(modelName, (message) => opts.onProgress?.({ stage: 'model', message }))
 
-  opts.onProgress?.({ stage: 'audio', message: 'Extracting the audio…' })
-  await run(tools.ffmpeg, ['-v', 'error', '-y', '-i', abs, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', join(dir, 'audio.wav')], { signal: opts.signal })
+  // The audio is only for whisper: a transcript kept from the last attempt needs none.
+  const audio = join(dir, 'audio.wav')
+  const transcript = async (): Promise<Segment[]> => {
+    if (unfinished.transcript) {
+      try {
+        const kept = readWhisper(tools.engine, dir)
+        opts.onProgress?.({ stage: 'transcribe', percent: 100, message: 'Transcript kept from the last attempt.' })
+        return kept
+      } catch {
+        /* unreadable after all: transcribe again */
+      }
+    }
+    if (unfinished.audio && existsSync(audio)) {
+      opts.onProgress?.({ stage: 'audio', message: 'Audio kept from the last attempt.' })
+    } else {
+      opts.onProgress?.({ stage: 'audio', message: 'Extracting the audio…' })
+      // Written aside and renamed once complete: a half-written audio file is never taken for a whole one.
+      const part = join(dir, 'audio.part.wav')
+      await run(tools.ffmpeg, ['-v', 'error', '-y', '-i', abs, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', part], { signal: opts.signal, onSpawn: opts.onSpawn })
+      renameSync(part, audio)
+      unfinished.audio = true
+      save()
+    }
+    opts.onProgress?.({ stage: 'transcribe', percent: 0, message: 'Transcribing…' })
+    const segments = await transcribe(tools, model, dir, language, opts)
+    unfinished.transcript = true
+    save()
+    return segments
+  }
 
-  // The frames are extracted while whisper transcribes: both take a while.
-  opts.onProgress?.({ stage: 'transcribe', percent: 0, message: 'Transcribing…' })
-  // OCR follows the frames, still while whisper works.
-  const shots = extractFrames(tools, abs, dir, opts).then(async (r) => ({ ...r, ocr: await readScreens(dir, r.frames, language, opts) }))
-  const [whisperSegments, { frames, dropped, ocr }] = await Promise.all([transcribe(tools, model, dir, language, opts), shots])
-  rmSync(join(dir, 'audio.wav'), { force: true })
+  // The frames, then their text, while whisper works: both take a while.
+  const shots = async (): Promise<{ frames: Frame[]; dropped: number; ocr: Manifest['ocr'] }> => {
+    let kept = unfinished.frames
+    if (kept && kept.frames.every((f) => existsSync(join(dir, f.file)))) {
+      opts.onProgress?.({ stage: 'frames', message: 'Key frames kept from the last attempt.' })
+    } else {
+      kept = await extractFrames(tools, abs, dir, opts)
+      unfinished.frames = kept
+      unfinished.ocr = undefined
+      save()
+    }
+    if (unfinished.ocr !== undefined) {
+      opts.onProgress?.({ stage: 'ocr', percent: 100, message: 'Text on screen kept from the last attempt.' })
+      return { ...kept, ocr: unfinished.ocr }
+    }
+    const ocr = await readScreens(dir, kept.frames, language, opts)
+    unfinished.ocr = ocr
+    save()
+    return { ...kept, ocr }
+  }
+
+  const [whisperSegments, { frames, dropped, ocr }] = await Promise.all([transcript(), shots()])
+  rmSync(audio, { force: true })
 
   // A recorder's metadata next to the video names the meeting and who spoke when.
   const recording = readRecording(abs)
@@ -303,6 +392,7 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
   }
   // Last: a folder with a manifest is a finished one.
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+  rmSync(join(dir, UNFINISHED), { force: true })
   const withText = frames.filter((f) => f.text).length
   opts.onProgress?.({
     stage: 'done',

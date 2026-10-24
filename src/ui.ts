@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 import { ENGINES, findBinary, homeDir, MODELS, type Engine, type ModelName } from './deps.js'
+import { Log } from './log.js'
 import { cleanChapters, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
 import { listVideos, loadVideo, processVideo, videoId } from './process.js'
 import { Queue, type JobOptions } from './queue.js'
@@ -49,7 +50,9 @@ const CLAUDE_MODELS = ['sonnet', 'opus', 'fable', 'haiku']
 /** The transcript goes whole into the prompt up to this size; longer ones are read with the MCP tools. */
 const MAX_INLINE_TRANSCRIPT = 60_000
 
-const queue = new Queue(processVideo, join(homeDir(), 'queue.json'))
+const LOG_FILE = join(homeDir(), 'logs', 'ui.log')
+const log = new Log(LOG_FILE, true)
+const queue = new Queue(processVideo, { file: join(homeDir(), 'queue.json'), log: (level, message, detail) => log.add(level, 'queue', message, detail) })
 const chats = new Set<ChildProcess>()
 
 const MIME: Record<string, string> = {
@@ -175,8 +178,11 @@ function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, un
   // Run in the video's folder (or the cache) so no project's CLAUDE.md or settings leak in.
   const cwd = video?.dir ?? homeDir()
   mkdirSync(cwd, { recursive: true })
+  const about = library ? 'all videos' : `"${video!.manifest.title}"`
+  log.info('chat', `Question about ${about} with ${claudeModel(body.model)}${session ? ' (follow-up)' : ''}`, question)
   const child = spawn(claude, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
   chats.add(child)
+  let answered = false
   res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' })
   const send = (event: Record<string, unknown>): void => void res.write(`${JSON.stringify(event)}\n`)
   if (labels) send({ type: 'labels', labels })
@@ -206,8 +212,13 @@ function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, un
         // Which frames Claude looked at, so the page can show them.
         for (const block of msg.message?.content ?? [])
           if (block.type === 'tool_use' && /get_frames$/.test(block.name)) send({ type: 'frames', input: block.input })
-      } else if (msg.type === 'result')
-        send({ type: 'done', error: msg.is_error ? String(msg.result ?? 'Claude failed.') : undefined, cost: msg.total_cost_usd, ms: msg.duration_ms })
+      } else if (msg.type === 'result') {
+        answered = true
+        const error = msg.is_error ? claudeHint(String(msg.result ?? 'Claude failed.')) : undefined
+        if (error) log.error('chat', `Claude failed on a question about ${about}: ${error}`, line.slice(0, 4000))
+        else log.info('chat', `Answered about ${about} in ${((msg.duration_ms ?? 0) / 1000).toFixed(1)} s${msg.total_cost_usd ? ` ($${Number(msg.total_cost_usd).toFixed(4)})` : ''}`)
+        send({ type: 'done', error, cost: msg.total_cost_usd, ms: msg.duration_ms })
+      }
     }
   })
   child.stderr.on('data', (d: Buffer) => (stderr = (stderr + d.toString()).slice(-4000)))
@@ -215,9 +226,14 @@ function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, un
     send({ type: 'done', error: error.message })
     res.end()
   })
-  child.on('close', (code) => {
+  child.on('close', (code, signal) => {
     chats.delete(child)
-    if (code !== 0 && stderr.trim()) send({ type: 'done', error: stderr.trim().split('\n').slice(-3).join(' ') })
+    if (signal === 'SIGTERM' && !answered) log.info('chat', `Stopped the answer about ${about}`)
+    else if (code !== 0 && !answered) {
+      const reason = stderr.trim().split('\n').slice(-3).join(' ') || `claude exited with code ${code}`
+      log.error('chat', `Claude failed on a question about ${about}: ${reason}`, stderr)
+      send({ type: 'done', error: claudeHint(reason) })
+    }
     res.end()
   })
   // Stop Claude when the page stops listening (the user pressed stop or left).
@@ -226,21 +242,31 @@ function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, un
   })
 }
 
-function runTool(command: string, args: string[], cwd?: string): Promise<string> {
+/** Run a tool to the end: its output and exit code, whether it failed or not (claude reports its errors on stdout). */
+function runTool(command: string, args: string[], cwd?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
     chats.add(child)
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (d: Buffer) => (stdout += d.toString()))
-    child.stderr.on('data', (d: Buffer) => (stderr = (stderr + d.toString()).slice(-4000)))
+    child.stderr.on('data', (d: Buffer) => (stderr = (stderr + d.toString()).slice(-8000)))
     child.on('error', reject)
     child.on('close', (code) => {
       chats.delete(child)
-      if (code === 0) resolvePromise(stdout)
-      else reject(new Error(`${basename(command)} failed: ${stderr.trim().split('\n').slice(-2).join(' ') || `exit ${code}`}`))
+      resolvePromise({ code, stdout, stderr })
     })
   })
+}
+
+/** An error already in the log with its details: the request handler only answers with it. */
+class LoggedError extends Error {}
+
+/** What to do about a claude error the user can fix. */
+function claudeHint(message: string): string {
+  if (/authenticat|oauth|logged in|log in|login|401/i.test(message)) return `${message} Sign in again: run \`claude auth login\` in a terminal.`
+  if (/rate.?limit|usage limit|429/i.test(message)) return `${message} Wait a moment, or pick another model.`
+  return message
 }
 
 const CHAPTERS_SCHEMA = {
@@ -273,15 +299,27 @@ async function makeChapters(id: string, model: string): Promise<unknown> {
     'Write titles and summaries in the language spoken in the video.',
     `Transcript:\n\n${transcript}`
   ].join('\n\n')
+  log.info('chapters', `Generating chapters for "${m.title}" with ${model}`)
+  const started = Date.now()
   const out = await runTool(
     claude,
     ['-p', prompt, '--model', model, '--output-format', 'json', '--json-schema', JSON.stringify(CHAPTERS_SCHEMA), '--tools', '', '--strict-mcp-config', '--no-session-persistence'],
     video.dir
   )
-  const result = JSON.parse(out) as { is_error?: boolean; result?: string; structured_output?: { chapters?: { start: string; title: string; summary?: string }[] } }
-  if (result.is_error || !result.structured_output?.chapters) throw new Error(result.result || 'Claude did not return chapters.')
+  let result: { is_error?: boolean; result?: string; total_cost_usd?: number; structured_output?: { chapters?: { start: string; title: string; summary?: string }[] } } = {}
+  try {
+    result = JSON.parse(out.stdout)
+  } catch {
+    /* not JSON: the error is in stderr */
+  }
+  if (out.code !== 0 || result.is_error || !result.structured_output?.chapters) {
+    const reason = result.result || out.stderr.trim().split('\n').slice(-3).join(' ') || `claude exited with code ${out.code}`
+    log.error('chapters', `Chapters for "${m.title}" failed: ${reason}`, [`exit code ${out.code}`, out.stderr.trim(), out.stdout.trim().slice(0, 4000)].filter(Boolean).join('\n\n'))
+    throw new LoggedError(claudeHint(reason))
+  }
   const chapters = cleanChapters(result.structured_output.chapters, m.duration, parseTime)
   writeChapters(video.dir, chapters)
+  log.info('chapters', `${chapters.length} chapters for "${m.title}" in ${((Date.now() - started) / 1000).toFixed(1)} s${result.total_cost_usd ? ` ($${result.total_cost_usd.toFixed(4)})` : ''}`)
   return chapters
 }
 
@@ -313,8 +351,13 @@ async function clip(req: IncomingMessage, res: ServerResponse, id: string, url: 
           ? ['-vn', '-c:a', 'aac', '-b:a', '128k']
           : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart']
     // -ss before -i seeks fast, and accurately since the clip is encoded again.
-    await runTool(ffmpeg, [...input, ...encode, tmp])
+    const out = await runTool(ffmpeg, [...input, ...encode, tmp])
+    if (out.code !== 0) {
+      log.error('clip', `Clip ${formatTime(from)}–${formatTime(to)} of "${m.title}" failed`, out.stderr)
+      return json(res, 500, { error: `ffmpeg failed: ${out.stderr.trim().split('\n').slice(-2).join(' ')}` })
+    }
     renameSync(tmp, file)
+    log.info('clip', `${format.toUpperCase()} clip ${formatTime(from)}–${formatTime(to)} of "${m.title}"`)
   }
   const name = `${m.title} ${formatTime(from).replace(/:/g, '-')} to ${formatTime(to).replace(/:/g, '-')}.${format}`
   res.setHeader('content-disposition', `attachment; filename="${name.replace(/[^\w.\- ]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`)
@@ -329,6 +372,7 @@ async function upload(req: IncomingMessage, res: ServerResponse, url: URL): Prom
   mkdirSync(dir, { recursive: true })
   const target = join(dir, name)
   await pipeline(req, createWriteStream(target))
+  log.info('upload', `Received ${name} (${(statSync(target).size / 1e6).toFixed(1)} MB)`)
   json(res, 200, { path: target })
 }
 
@@ -358,7 +402,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (parts[0] !== 'api') return json(res, 404, { error: 'Not found.' })
 
   if (req.method === 'GET' && parts[1] === 'config' && parts.length === 2)
-    return json(res, 200, { claudeModels: CLAUDE_MODELS, whisperModels: MODELS, engines: ENGINES, claude: Boolean(claudeBinary()) })
+    return json(res, 200, { claudeModels: CLAUDE_MODELS, whisperModels: MODELS, engines: ENGINES, claude: Boolean(claudeBinary()), logFile: LOG_FILE })
 
   if (req.method === 'GET' && parts[1] === 'videos' && parts.length === 2)
     return json(res, 200, listVideos().map((m) => ({ id: m.id, title: m.title, duration: m.duration, createdAt: m.createdAt, source: m.source, available: existsSync(m.source) })))
@@ -405,6 +449,14 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
   }
 
+  if (parts[1] === 'logs') {
+    if (req.method === 'GET') return json(res, 200, log.since(Number(url.searchParams.get('after') ?? 0)))
+    if (req.method === 'DELETE') {
+      log.clear()
+      return json(res, 200, [])
+    }
+  }
+
   if (parts[1] === 'jobs') {
     if (req.method === 'GET' && parts.length === 2) return json(res, 200, { jobs: queue.list(), now: Date.now() })
     if (req.method === 'POST' && parts[2] === 'clear') {
@@ -440,7 +492,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
 const server = createServer((req, res) => {
   route(req, res).catch((error: unknown) => {
-    if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) })
+    const message = error instanceof Error ? error.message : String(error)
+    if (!(error instanceof LoggedError)) log.error('server', `${req.method} ${req.url?.replace(/\?.*/, '')}: ${message}`, error instanceof Error ? error.stack : undefined)
+    if (!res.headersSent) json(res, 500, { error: message })
     else res.end()
   })
 })
@@ -452,7 +506,7 @@ server.on('error', (error: NodeJS.ErrnoException) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   const address = `http://localhost:${PORT}`
-  console.log(`video-context UI: ${address}`)
+  log.info('server', `video-context UI on ${address} (cache: ${homeDir()})`)
   if (values.open) {
     const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open'
     spawn(opener, [address], { stdio: 'ignore', detached: true }).unref()

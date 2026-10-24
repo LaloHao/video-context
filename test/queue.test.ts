@@ -93,17 +93,23 @@ describe('queue', () => {
     expect(states(q)).toEqual(['c.mp4:running'])
   })
 
-  it('saves the queue, and starts again a job that was running', () => {
+  it('saves the queue, stops what a dead server left running, and starts the job again', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'vc-queue-')), 'queue.json')
     const first = fakeRunner()
-    const q = new Queue(first.run, file)
+    const q = new Queue(first.run, { file })
     q.add('/v/a.mp4', 'a')
     q.add('/v/b.mp4', 'b')
     q.stop()
     expect(JSON.parse(readFileSync(file, 'utf8')).map((j: { state: string }) => j.state)).toEqual(['running', 'queued'])
 
+    first.calls[0].opts.onSpawn?.(4242)
+    q.stop()
+    expect(JSON.parse(readFileSync(file, 'utf8'))[0].pids).toEqual([4242])
+
     const second = fakeRunner()
-    const restarted = new Queue(second.run, file)
+    const left: number[][] = []
+    const restarted = new Queue(second.run, { file, stopLeftovers: (pids) => (left.push(pids), pids) })
+    expect(left).toEqual([[4242]])
     expect(states(restarted)).toEqual(['a.mp4:running', 'b.mp4:queued'])
     expect(second.calls[0].path).toBe('/v/a.mp4')
   })

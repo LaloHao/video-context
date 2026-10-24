@@ -38,9 +38,10 @@ export function cleanOcr(text: string): string {
     .join('\n')
 }
 
-export function ocrImage(bin: string, file: string, langs: readonly string[], signal?: AbortSignal): Promise<string> {
+export function ocrImage(bin: string, file: string, langs: readonly string[], signal?: AbortSignal, onSpawn?: (pid: number) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, [file, 'stdout', '-l', langs.join('+'), '--psm', '3'], { stdio: ['ignore', 'pipe', 'pipe'], signal })
+    if (child.pid) onSpawn?.(child.pid)
     let out = ''
     child.stdout.on('data', (d: Buffer) => (out += d.toString()))
     child.stderr.on('data', () => {})

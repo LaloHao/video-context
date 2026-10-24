@@ -156,9 +156,9 @@ dialog h2 { margin: 0 0 12px; font-size: 16px; }
 .row > label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); flex: 1 1 120px; }
 .row input[type=text] { flex: 1; }
 progress { width: 100%; accent-color: var(--accent); }
-#queue { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.18); z-index: 20; display: flex; flex-direction: column; transform: translateX(105%); transition: transform .2s ease; }
-#queue.open { transform: none; }
-#queue .pane-head h2 { font-size: 15px; margin: 0; flex: 1; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.18); z-index: 20; display: flex; flex-direction: column; transform: translateX(105%); transition: transform .2s ease; }
+.drawer.open { transform: none; }
+.drawer .pane-head h2 { font-size: 15px; margin: 0; flex: 1; }
 #queueList { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .qsection { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 6px 2px 0; }
 .qjob { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -182,7 +182,26 @@ progress { width: 100%; accent-color: var(--accent); }
 .qmsg { font-size: 12.5px; color: var(--muted); }
 .qmsg.err { color: var(--err); overflow-wrap: anywhere; }
 .qactions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-#queue .placeholder { margin: 40px auto; }
+.drawer .placeholder { margin: 40px auto; }
+#logs { width: min(760px, 100vw); }
+#logsBtn .badge { background: var(--err); }
+#logList { flex: 1; overflow-y: auto; font: 12.5px/1.5 var(--mono); padding: 6px 0; }
+.log { padding: 2px 12px; display: grid; grid-template-columns: 64px 46px minmax(0, 1fr); gap: 8px; border-left: 3px solid transparent; }
+.log:hover { background: var(--bg); }
+.log.warn { border-left-color: var(--hit); }
+.log.error { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+.log .t { color: var(--muted); }
+.log .lv { font-size: 11px; text-transform: uppercase; color: var(--muted); }
+.log.warn .lv { color: var(--hit); }
+.log.error .lv { color: var(--err); font-weight: 700; }
+.log .src { color: var(--accent); }
+.log .msg { white-space: pre-wrap; overflow-wrap: anywhere; font-family: system-ui, sans-serif; }
+.log.has-detail .msg { cursor: pointer; }
+.log.has-detail .msg::after { content: " ▸"; color: var(--muted); }
+.log.open .msg::after { content: " ▾"; }
+.log pre { grid-column: 3; margin: 4px 0 6px; padding: 8px; background: var(--bg); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: 12px; }
+#logs .filters { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#logs .filters input { flex: 1; min-width: 120px; }
 #scrim { position: fixed; inset: 0; z-index: 19; background: rgba(0,0,0,.25); }
 #toast button { margin-left: 10px; background: none; border: 0; color: var(--accent); font-weight: 600; padding: 0; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 30; max-width: calc(100vw - 32px); }
@@ -200,6 +219,7 @@ progress { width: 100%; accent-color: var(--accent); }
   <select id="videoSelect" aria-label="Video"></select>
   <button class="btn primary" id="newBtn">+ New video</button>
   <button class="btn" id="queueBtn" title="Processing queue (Q)">Queue <span class="badge" id="queueCount"></span><span id="queueSummary"></span><span class="mini" id="queueMini" style="width:0"></span></button>
+  <button class="btn" id="logsBtn" title="Logs (L with Shift)">Logs <span class="badge" id="logsCount"></span></button>
   <span class="spacer"></span>
   <label>Claude <select id="model" aria-label="Claude model"></select></label>
   <span class="muted" style="font-size:12px" title="Space play/pause · J/L ±5 s · / search · N note · B bookmark · [ ] clip start/end">Keys: Space J L / N B [ ]</span>
@@ -285,7 +305,7 @@ progress { width: 100%; accent-color: var(--accent); }
 
 <div id="selMenu"><button class="btn small primary" id="selAsk">Ask about this</button><button class="btn small" id="selNote">Note</button><button class="btn small" id="selClip">✂ Clip</button></div>
 <div id="scrim" hidden></div>
-<aside id="queue" aria-label="Processing queue" aria-hidden="true">
+<aside id="queue" class="drawer" aria-label="Processing queue" aria-hidden="true">
   <div class="pane-head">
     <h2>Processing queue</h2>
     <button class="btn small primary" id="queueAdd">+ Add videos</button>
@@ -295,6 +315,24 @@ progress { width: 100%; accent-color: var(--accent); }
   <div class="pane-head" style="border-top:1px solid var(--line);border-bottom:0">
     <span class="muted" style="flex:1;font-size:12.5px">One video at a time, in order. The queue survives a restart.</span>
     <button class="btn small" id="queueClear">Clear finished</button>
+  </div>
+</aside>
+<aside id="logs" class="drawer" aria-label="Logs" aria-hidden="true">
+  <div class="pane-head">
+    <h2>Logs</h2>
+    <button class="btn small" id="logsCopy" title="Copy the entries shown">Copy</button>
+    <button class="btn small" id="logsClear" title="Clear the list (the log file stays)">Clear</button>
+    <button class="btn small" id="logsClose" title="Close (Esc)">×</button>
+  </div>
+  <div class="filters">
+    <select id="logLevel" aria-label="Level"><option value="info">All</option><option value="warn">Warnings and errors</option><option value="error">Errors</option></select>
+    <select id="logSource" aria-label="Source"><option value="">Every source</option></select>
+    <input type="search" id="logSearch" placeholder="Filter…">
+  </div>
+  <div id="logList"></div>
+  <div class="pane-head" style="border-top:1px solid var(--line);border-bottom:0">
+    <span class="muted" style="flex:1;font-size:12px" id="logFile"></span>
+    <label class="check"><input type="checkbox" id="logFollow" checked> Follow</label>
   </div>
 </aside>
 <div id="toast" hidden></div>
@@ -601,7 +639,7 @@ $('#genChapters').onclick = async () => {
     if (!res.ok) throw new Error(body.error)
     status.textContent = `${body.length} chapters by ${$('#model').value} in ${Math.round((Date.now() - started) / 1000)} s.`
     if (current.manifest.id === id) { current.chapters = body; renderChapters(); renderTranscript(); runSearch(); renderTimeline() }
-  } catch (err) { status.innerHTML = `<span class="err">${esc(err.message)}</span>` }
+  } catch (err) { status.innerHTML = `<span class="err">${esc(err.message)}</span> <a href="#" class="see-logs">See the logs</a>`; status.querySelector('.see-logs').onclick = (e) => { e.preventDefault(); openLogs({ source: 'chapters' }) } }
   finally { clearInterval(tick); btn.disabled = false }
 }
 
@@ -709,7 +747,7 @@ function messageHtml(m, i) {
   if (m.role === 'user') return esc(m.text)
   const tools = m.tools?.length ? `<div class="tools">${m.tools.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''
   const seen = m.frames?.length ? `<div class="seen" title="Frames Claude looked at">${m.frames.map((f) => `<img src="${frameUrl(m.videoId, f)}" data-v="${m.videoId}" data-t="${f.time}" title="${fmt(f.time)}">`).join('')}</div>` : ''
-  const err = m.error ? `<p class="err">${esc(m.error)}</p>` : ''
+  const err = m.error ? `<p class="err">${esc(m.error)} <a href="#" data-logs="chat">See the logs</a></p>` : ''
   const save = m.text && !m.labels && i !== undefined ? `<button data-save="${i}">Save to notes</button>` : ''
   const meta = m.meta || save ? `<div class="meta"><span>${esc(m.meta ?? '')}</span>${save}</div>` : ''
   return tools + seen + markdown(m.text || '', m.labels) + err + meta
@@ -740,6 +778,8 @@ function renderSuggestions() {
   }
 }
 $('#messages').addEventListener('click', (e) => {
+  const logsLink = e.target.closest('[data-logs]')
+  if (logsLink) { e.preventDefault(); return openLogs({ source: logsLink.dataset.logs }) }
   const save = e.target.closest('[data-save]')
   if (save) {
     const m = chat.messages[+save.dataset.save]
@@ -783,7 +823,7 @@ async function ask(question) {
         else if (ev.type === 'text') msg.text += ev.text
         else if (ev.type === 'turn' && msg.text && !msg.text.endsWith('\n\n')) msg.text += '\n\n'
         else if (ev.type === 'tool') msg.tools.push(ev.name)
-        else if (ev.type === 'frames') for (const f of framesFor(ev.input)) if (!msg.frames.some((x) => x.file === f.file)) msg.frames.push(f)
+        else if (ev.type === 'frames') { for (const f of framesFor(ev.input)) if (!msg.frames.some((x) => x.file === f.file)) msg.frames.push(f) }
         else if (ev.type === 'done') { if (ev.error) msg.error = ev.error; msg.meta = `${model} · ${((ev.ms ?? Date.now() - started) / 1000).toFixed(1)}s${ev.cost ? ` · $${ev.cost.toFixed(4)}` : ''}` }
       }
       if (Date.now() - paint > 50) { repaint(); paint = Date.now() }
@@ -890,7 +930,7 @@ const serverNow = () => Date.now() - skew
 // The four parts of processing: what is done, what is running and how far.
 function steps(j) {
   const finished = j.state === 'done'
-  const prepDone = finished || j.transcribe !== undefined || j.frames
+  const prepDone = finished || j.transcribe !== undefined
   const tDone = finished || j.transcribe === 100
   const fDone = finished || j.ocr !== undefined
   const oDone = finished || j.ocr === 100
@@ -924,7 +964,7 @@ function jobHtml(j, position) {
     queued: `${position > 1 ? `<button class="btn small" data-act="top">Move to front</button>` : ''}<button class="btn small" data-act="cancel">Remove</button>`,
     running: `<button class="btn small" data-act="cancel">Cancel</button>`,
     done: `<button class="btn small primary" data-act="open">Open</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
-    failed: `<button class="btn small" data-act="retry">Retry</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
+    failed: `<button class="btn small" data-act="logs">Logs</button><button class="btn small" data-act="retry">Retry</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
     canceled: `<button class="btn small" data-act="retry">Process again</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`
   }[j.state]
   return `<div class="qjob ${j.state}" data-id="${j.id}">
@@ -969,21 +1009,98 @@ $('#queueList').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-act]'); if (!b) return
   const id = b.closest('.qjob').dataset.id, act = b.dataset.act, job = jobs.find((j) => j.id === id)
   if (act === 'open') { closeQueue(); return openVideo(job.videoId) }
+  if (act === 'logs') { $('#logSearch').value = job.name; return openLogs({ source: 'queue' }) }
   if (act === 'cancel' && job.state === 'running' && !confirm(`Stop processing ${job.name}? What was done so far is lost.`)) return
   b.disabled = true
   await api(act === 'remove' ? `/api/jobs/${id}` : `/api/jobs/${id}/${act}`, { method: act === 'remove' ? 'DELETE' : 'POST' })
   watchJobs()
 })
 $('#queueClear').onclick = async () => { await api('/api/jobs/clear', { method: 'POST' }); watchJobs() }
-function openQueue() { $('#queue').classList.add('open'); $('#queue').setAttribute('aria-hidden', 'false'); $('#scrim').hidden = false; watchJobs() }
-function closeQueue() { $('#queue').classList.remove('open'); $('#queue').setAttribute('aria-hidden', 'true'); $('#scrim').hidden = true }
-$('#queueBtn').onclick = () => ($('#queue').classList.contains('open') ? closeQueue() : openQueue())
-$('#queueClose').onclick = closeQueue
-$('#scrim').onclick = closeQueue
+// The side panels (queue, logs): one open at a time.
+function openDrawer(id) {
+  for (const d of document.querySelectorAll('.drawer')) { d.classList.toggle('open', d.id === id); d.setAttribute('aria-hidden', String(d.id !== id)) }
+  $('#scrim').hidden = false
+}
+function closeDrawers() {
+  for (const d of document.querySelectorAll('.drawer')) { d.classList.remove('open'); d.setAttribute('aria-hidden', 'true') }
+  $('#scrim').hidden = true
+}
+const isOpen = (id) => $(`#${id}`).classList.contains('open')
+function openQueue() { openDrawer('queue'); watchJobs() }
+const closeQueue = closeDrawers
+$('#queueBtn').onclick = () => (isOpen('queue') ? closeDrawers() : openQueue())
+$('#queueClose').onclick = closeDrawers
+$('#scrim').onclick = closeDrawers
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && $('#queue').classList.contains('open') && !$('#newDialog').open) closeQueue()
-  else if (e.key === 'q' && !e.target.closest('input, textarea, select, [contenteditable]') && !e.metaKey && !e.ctrlKey && !e.altKey) $('#queueBtn').click()
+  const typing = e.target.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey
+  if (e.key === 'Escape' && document.querySelector('.drawer.open') && !$('#newDialog').open) closeDrawers()
+  else if (!typing && e.key === 'q') $('#queueBtn').click()
+  else if (!typing && e.key === 'L') $('#logsBtn').click()
 })
+
+// ---------- logs ----------
+let logs = [], logSeq = 0, logsTimer = null
+const seenErrors = () => store.get('logsSeen', 0)
+function logMatches(e) {
+  const level = $('#logLevel').value, src = $('#logSource').value, q = fold($('#logSearch').value.trim())
+  if (level === 'warn' && e.level === 'info') return false
+  if (level === 'error' && e.level !== 'error') return false
+  if (src && e.source !== src) return false
+  return !q || fold(`${e.source} ${e.message} ${e.detail ?? ''}`).includes(q)
+}
+function logHtml(e) {
+  const time = new Date(e.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+  return `<div class="log ${e.level} ${e.detail ? 'has-detail' : ''}" data-seq="${e.seq}"><span class="t">${time}</span><span class="lv">${e.level}</span><span class="msg"><span class="src">${esc(e.source)}</span> ${esc(e.message)}</span></div>`
+}
+function renderLogs() {
+  const list = $('#logList'), atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40
+  const shown = logs.filter(logMatches)
+  list.innerHTML = shown.length ? shown.map(logHtml).join('') : `<p class="placeholder muted">${logs.length ? 'No entry matches the filters.' : 'Nothing logged yet. Processing, chapters, chat questions and errors show here.'}</p>`
+  if ($('#logFollow').checked && atBottom) list.scrollTop = list.scrollHeight
+  const sources = [...new Set(logs.map((e) => e.source))].sort(), sel = $('#logSource'), cur = sel.value
+  sel.innerHTML = '<option value="">Every source</option>' + sources.map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('')
+}
+function updateLogBadge() {
+  const n = logs.filter((e) => e.level === 'error' && e.seq > seenErrors()).length
+  $('#logsCount').textContent = n || ''
+  $('#logsBtn').title = n ? `${n} new error${n === 1 ? '' : 's'}` : 'Logs (Shift+L)'
+}
+async function watchLogs() {
+  clearTimeout(logsTimer)
+  try {
+    const fresh = await (await api(`/api/logs?after=${logSeq}`)).json()
+    // A restarted server counts from 1 again: start over.
+    if (fresh.length && fresh[0].seq <= logSeq) { logs = []; store.set('logsSeen', 0) }
+    if (fresh.length) {
+      logs = [...logs, ...fresh].slice(-2000); logSeq = logs.at(-1).seq
+      if (isOpen('logs')) { renderLogs(); store.set('logsSeen', logSeq) }
+    }
+    updateLogBadge()
+  } catch {}
+  logsTimer = setTimeout(watchLogs, isOpen('logs') ? 1000 : 3000)
+}
+function openLogs(filter) {
+  openDrawer('logs')
+  // The sources come from the entries: list them before choosing one.
+  renderLogs()
+  if (filter) { $('#logLevel').value = filter.level ?? 'info'; $('#logSource').value = filter.source ?? ''; renderLogs() } store.set('logsSeen', logSeq); updateLogBadge(); watchLogs()
+  $('#logList').scrollTop = $('#logList').scrollHeight
+}
+$('#logsBtn').onclick = () => (isOpen('logs') ? closeDrawers() : openLogs())
+$('#logsClose').onclick = closeDrawers
+for (const id of ['#logLevel', '#logSource']) $(id).addEventListener('change', renderLogs)
+$('#logSearch').addEventListener('input', renderLogs)
+$('#logList').addEventListener('click', (e) => {
+  const row = e.target.closest('.log.has-detail'); if (!row || !e.target.closest('.msg') || getSelection().toString()) return
+  const open = row.classList.toggle('open')
+  if (open) { const entry = logs.find((x) => x.seq === +row.dataset.seq); row.insertAdjacentHTML('beforeend', `<pre>${esc(entry.detail)}</pre>`) }
+  else row.querySelector('pre')?.remove()
+})
+$('#logsCopy').onclick = async () => {
+  const text = logs.filter(logMatches).map((e) => `${new Date(e.time).toISOString()} ${e.level.toUpperCase()} [${e.source}] ${e.message}${e.detail ? `\n${e.detail.replace(/^/gm, '    ')}` : ''}`).join('\n')
+  try { await navigator.clipboard.writeText(text); toast('Logs copied.') } catch { toast('Could not copy: select the text instead.') }
+}
+$('#logsClear').onclick = async () => { await api('/api/logs', { method: 'DELETE' }); logs = []; renderLogs(); updateLogBadge() }
 
 // ---------- start ----------
 ;(async () => {
@@ -996,6 +1113,8 @@ document.addEventListener('keydown', (e) => {
   $('#engine').innerHTML += config.engines.map((m) => `<option>${m}</option>`).join('')
   $('#scope').value = store.get('scope', 'video')
   showTab(store.get('tab', 'chat'))
+  $('#logFile').textContent = config.logFile ? `Also saved in ${config.logFile}` : ''
+  watchLogs()
   await loadList()
   if (scope() === 'library') $('#scope').dispatchEvent(new Event('change'))
   watchJobs()
