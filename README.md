@@ -104,6 +104,7 @@ modification time.
 | `get_transcript` | The transcript as `[m:ss] text` lines (`[m:ss] Name: text` with speakers), optionally a time range. |
 | `search_transcript` | Where something is said or shown on screen, with times (accents and case aside). |
 | `get_frames` | Key frames as images with their on-screen text: around a time or over a range. |
+| `get_screen` | The exact screen at any times, from the video file, with its text: what key frames miss, like code being typed. |
 | `list_frames` | The time of every key frame. |
 | `search_videos` | Where something is said or shown across every processed video. |
 
@@ -127,8 +128,10 @@ and engine you pick; the queue shows each step's progress, and can cancel, retry
 - **Ask Claude** through the [`claude` CLI](https://claude.com/claude-code) (your own login;
   pick the model at the top), about this video or about all your videos at once (*"in which
   meeting did they decide the deadline?"*). Claude gets the transcript and this package's MCP
-  tools, so it can search and look at the frames; the frames it looked at show in the answer,
-  and every time it cites (`[3:07]`, `[V2 3:07]` for another video) is a link to that moment.
+  tools, so it can search and look at the screen — the key frames, and the exact screen at
+  any moment, to read code being typed; what it looked at shows in the answer, and every time
+  it cites (`[3:07]`, `[V2 3:07]` for another video) is a link to that moment. Examples:
+  **[docs/claude.md](docs/claude.md)**.
 - **Chapters**: Claude splits the video where the topic changes; they show on the bar under the
   player, in the transcript and in their own tab.
 - **Clips**: mark a start and an end (`[` and `]`, a range in an answer, or selected

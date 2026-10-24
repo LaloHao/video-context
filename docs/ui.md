@@ -30,8 +30,9 @@ answers from Claude Sonnet; each screenshot is under the license of the video it
 - **Ask Claude** runs the [`claude` CLI](https://claude.com/claude-code) with your login and
   the model chosen at the top (sonnet, opus, fable, haiku). Claude gets the whole transcript
   (or reads it with the tools, when it is long), the chapters and your notes, and this
-  package's MCP tools: it searches, and looks at the key frames when the question is about
-  the screen. The tools it used and the frames it looked at show above the answer. Every
+  package's MCP tools: it searches, and looks at the screen — the key frames, and the exact
+  screen at any moment (`get_screen`), to read what is typed between them. Examples of what
+  to ask, with real answers: **[claude.md](claude.md)**. The tools it used and the frames it looked at show above the answer. Every
   time it cites is a link to that moment, and a range (`[7:50–8:35]`) has a ✂ that marks it
   as a clip. Follow-up questions continue the same conversation; **New chat** starts over.
 - Select lines of the transcript to **ask about them**, keep them as a **note**, or **clip**
