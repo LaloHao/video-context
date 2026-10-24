@@ -203,6 +203,10 @@ progress { width: 100%; accent-color: var(--accent); }
 #logs .filters { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 #logs .filters input { flex: 1; min-width: 120px; }
 #scrim { position: fixed; inset: 0; z-index: 19; background: rgba(0,0,0,.25); }
+/* A page exported with its video: no server behind it. */
+.static #newBtn, .static #exportBtn, .static #queueBtn, .static #logsBtn, .static header label, .static #tabs [data-tab=chat], .static #genChapters,
+.static #clipMp4, .static #clipGif, .static #searchAllLabel, .static #selAsk { display: none !important; }
+#exportedTag { font-size: 12px; color: var(--muted); }
 #toast button { margin-left: 10px; background: none; border: 0; color: var(--accent); font-weight: 600; padding: 0; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 30; max-width: calc(100vw - 32px); }
 
@@ -217,7 +221,9 @@ progress { width: 100%; accent-color: var(--accent); }
 <header>
   <h1>video<span>·</span>context</h1>
   <select id="videoSelect" aria-label="Video"></select>
+  <button class="btn" id="exportBtn" title="Download this video as a ZIP: the video, its transcript, frames, chapters and notes, and a page that opens without a server. video-context imports it back without processing.">Export</button>
   <button class="btn primary" id="newBtn">+ New video</button>
+  <span id="exportedTag" hidden></span>
   <button class="btn" id="queueBtn" title="Processing queue (Q)">Queue <span class="badge" id="queueCount"></span><span id="queueSummary"></span><span class="mini" id="queueMini" style="width:0"></span></button>
   <button class="btn" id="logsBtn" title="Logs (L with Shift)">Logs <span class="badge" id="logsCount"></span></button>
   <span class="spacer"></span>
@@ -245,7 +251,7 @@ progress { width: 100%; accent-color: var(--accent); }
     <div id="frames"></div>
     <div id="tbar">
       <input type="search" id="search" placeholder="Search said or shown on screen…">
-      <label class="check" title="Search every processed video"><input type="checkbox" id="searchAll"> All videos</label>
+      <label class="check" id="searchAllLabel" title="Search every processed video"><input type="checkbox" id="searchAll"> All videos</label>
       <span id="hits" class="muted"></span>
       <button class="btn small" id="prevHit" title="Previous (Shift+Enter)">↑</button>
       <button class="btn small" id="nextHit" title="Next (Enter)">↓</button>
@@ -339,7 +345,8 @@ progress { width: 100%; accent-color: var(--accent); }
 
 <dialog id="newDialog">
   <h2>Add videos to the queue</h2>
-  <div id="drop">Drop video or audio files here, or <label style="color:var(--accent);cursor:pointer;text-decoration:underline">choose them<input type="file" id="file" accept="video/*,audio/*,.mkv" multiple hidden></label>
+  <div id="drop">Drop video or audio files here, or <label style="color:var(--accent);cursor:pointer;text-decoration:underline">choose them<input type="file" id="file" accept="video/*,audio/*,.mkv,.zip,application/zip" multiple hidden></label>
+    <div class="muted" style="font-size:12.5px;margin-top:4px">A video-context export (.zip) is imported as it is, without processing.</div>
     <div id="fileName" class="muted"></div>
   </div>
   <div class="row"><textarea id="path" rows="2" style="flex:1;resize:vertical" placeholder="…or paths on this computer, one per line, e.g. ~/Videos/meeting.mp4"></textarea></div>
@@ -360,9 +367,13 @@ progress { width: 100%; accent-color: var(--accent); }
   </div>
 </dialog>
 
+<!-- video-context:export -->
 <script>
 const $ = (s) => document.querySelector(s)
-const api = (path, opts = {}) => fetch(path, { ...opts, headers: { 'x-video-context': '1', ...(typeof opts.body === 'string' ? { 'content-type': 'application/json' } : {}), ...opts.headers } })
+// In an exported page the data comes with it (window.VIDEO_CONTEXT_EXPORT) and the files sit next to it.
+const EXPORT = window.VIDEO_CONTEXT_EXPORT
+if (EXPORT) document.documentElement.classList.add('static')
+const serverApi = (path, opts = {}) => fetch(path, { ...opts, headers: { 'x-video-context': '1', ...(typeof opts.body === 'string' ? { 'content-type': 'application/json' } : {}), ...opts.headers } })
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v) } catch { return d } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} }
@@ -371,7 +382,19 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const fmt = (sec) => { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = String(sec % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}` }
 const parseT = (t) => String(t).split(':').map(Number).reduce((a, n) => a * 60 + n, 0)
 const fold = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
-const frameUrl = (id, f) => `/api/videos/${id}/frames/${encodeURIComponent(f.file.split('/').pop())}`
+const frameUrl = (id, f) => (EXPORT ? f.file.split('/').map(encodeURIComponent).join('/') : `/api/videos/${id}/frames/${encodeURIComponent(f.file.split('/').pop())}`)
+const mediaUrl = (id) => (EXPORT ? encodeURIComponent(EXPORT.video) : `/api/videos/${id}/media`)
+// What the server would answer, from the exported data; notes edited here are kept in this browser.
+async function exportApi(path, opts = {}) {
+  const ok = (body) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+  const m = EXPORT.manifest, notesKey = `notes:${m.id}`
+  if (path === '/api/config') return ok({ claudeModels: [], whisperModels: [], engines: [], claude: false })
+  if (path === '/api/videos') return ok([{ id: m.id, title: m.title, duration: m.duration, createdAt: m.createdAt, available: Boolean(EXPORT.video) }])
+  if (path === `/api/videos/${m.id}`) return ok({ manifest: m, segments: EXPORT.segments, available: Boolean(EXPORT.video), chapters: EXPORT.chapters, notes: store.get(notesKey, EXPORT.notes) })
+  if (path === `/api/videos/${m.id}/notes`) { const notes = JSON.parse(opts.body).notes.sort((a, b) => a.time - b.time); store.set(notesKey, notes); return ok(notes) }
+  return new Response(JSON.stringify({ error: 'Not in an exported page: open it in video-context.' }), { status: 404 })
+}
+const api = EXPORT ? exportApi : serverApi
 const indexAt = (list, t, key) => { let lo = 0, hi = list.length - 1, ans = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (key(list[mid]) <= t) { ans = mid; lo = mid + 1 } else hi = mid - 1 } return ans }
 let toastTimer
 function toast(text, action, onAction) {
@@ -417,12 +440,15 @@ async function openVideo(id, at) {
   setClip(null, null)
   if (current.available) {
     wrap.innerHTML = ''; wrap.appendChild(player)
-    player.src = `/api/videos/${id}/media`
+    player.src = mediaUrl(id)
+    setSubtitles()
     player.currentTime = at ?? store.get(`pos:${id}`, 0)
     if (at !== undefined) player.play().catch(() => {})
   } else {
     player.removeAttribute('src')
-    wrap.innerHTML = `<div id="missing">The file is no longer at <code>${esc(m.source)}</code>.<br>The transcript and frames are still here.</div>`
+    wrap.innerHTML = EXPORT
+      ? `<div id="missing">This export does not include the video (${esc(EXPORT.originalName)}).<br>The transcript, frames, chapters and notes are here.</div>`
+      : `<div id="missing">The file is no longer at <code>${esc(m.source)}</code>.<br>The transcript and frames are still here.</div>`
   }
   renderFrames(); renderTranscript(); renderChapters(); renderNotes(); renderTimeline(); runSearch()
   if (scope() === 'video') loadChat()
@@ -464,7 +490,27 @@ $('#transcript').addEventListener('click', (e) => {
 })
 $('#frames').addEventListener('click', (e) => { const el = e.target.closest('.frame'); if (el) seek(+el.dataset.t) })
 $('#videoSelect').addEventListener('change', (e) => e.target.value && openVideo(e.target.value))
-$('#download').addEventListener('change', (e) => { if (e.target.value && current) location.href = `/api/videos/${current.manifest.id}/transcript/${e.target.value}`; e.target.value = '' })
+$('#download').addEventListener('change', (e) => {
+  if (e.target.value && current) EXPORT ? window.open(`transcript.${e.target.value}`) : (location.href = `/api/videos/${current.manifest.id}/transcript/${e.target.value}`)
+  e.target.value = ''
+})
+$('#exportBtn').onclick = () => {
+  if (!current) return
+  toast(`Preparing ${current.manifest.title}.zip… it downloads as it is written.`)
+  location.href = `/api/videos/${current.manifest.id}/export`
+}
+
+// The transcript as subtitles of the player (CC), made here: a <track> file is not allowed from a page opened as a file.
+let trackUrl = null
+function setSubtitles() {
+  for (const t of player.querySelectorAll('track')) t.remove()
+  if (trackUrl) URL.revokeObjectURL(trackUrl)
+  const ts = (sec) => { const ms = Math.round(sec * 1000), p = (n, w = 2) => String(n).padStart(w, '0'); return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)}.${p(ms % 1000, 3)}` }
+  const vtt = 'WEBVTT\n\n' + current.segments.map((s, i) => `${i + 1}\n${ts(s.start)} --> ${ts(s.end)}\n${s.speaker ? `${s.speaker}: ` : ''}${s.text}\n`).join('\n')
+  trackUrl = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }))
+  const lang = /^[a-z]{2,3}$/.test(current.manifest.language) ? current.manifest.language : 'und'
+  player.appendChild(Object.assign(document.createElement('track'), { kind: 'subtitles', label: 'Transcript', srclang: lang, src: trackUrl }))
+}
 
 function seek(t) {
   if (!current?.available) return
@@ -900,7 +946,7 @@ function uploadFile(file, label) {
 $('#startNew').onclick = async () => {
   const btn = $('#startNew'); btn.disabled = true; $('#newErr').textContent = ''
   const options = { language: $('#language').value, model: $('#wmodel').value, engine: $('#engine').value || undefined, force: $('#force').checked }
-  const errors = []
+  const errors = [], imported = []
   let added = 0
   try {
     const paths = $('#path').value.split('\n').map((p) => p.trim()).filter(Boolean)
@@ -910,13 +956,29 @@ $('#startNew').onclick = async () => {
       const body = await res.json()
       if (res.ok) added++; else errors.push(body.error)
     }
-    for (const path of paths) await add(path)
-    for (const [i, file] of chosenFiles.entries()) await add(await uploadFile(file, `Uploading ${chosenFiles.length > 1 ? `${i + 1}/${chosenFiles.length} ` : ''}${file.name}…`))
+    // An export comes in as it is: nothing to process.
+    const importZip = async (path) => {
+      $('#uploadLabel').hidden = false; $('#uploadLabel').textContent = `Importing ${path.split('/').pop()}…`
+      const res = await api('/api/import', { method: 'POST', body: JSON.stringify({ path }) })
+      const body = await res.json()
+      if (res.ok) imported.push(body); else errors.push(body.error)
+    }
+    const isZip = (name) => /\.zip$/i.test(name)
+    for (const path of paths) await (isZip(path) ? importZip(path) : add(path))
+    for (const [i, file] of chosenFiles.entries()) {
+      const path = await uploadFile(file, `Uploading ${chosenFiles.length > 1 ? `${i + 1}/${chosenFiles.length} ` : ''}${file.name}…`)
+      await (isZip(file.name) ? importZip(path) : add(path))
+    }
     if (errors.length) throw new Error(errors.join(' '))
     $('#newDialog').close()
   } catch (err) { $('#newErr').textContent = err.message }
   finally {
     btn.disabled = false; $('#uploadBar').hidden = $('#uploadLabel').hidden = true
+    if (imported.length) {
+      const last = imported.at(-1)
+      await loadList(last.id); openVideo(last.id)
+      toast(imported.length > 1 ? `${imported.length} videos imported.` : last.already ? `${last.title} was already here.` : `Imported ${last.title}: ready, nothing to process.`)
+    }
     if (added) { toast(`${added} video${added === 1 ? '' : 's'} added to the queue.`); openQueue() }
   }
 }
@@ -1032,7 +1094,7 @@ $('#queueBtn').onclick = () => (isOpen('queue') ? closeDrawers() : openQueue())
 $('#queueClose').onclick = closeDrawers
 $('#scrim').onclick = closeDrawers
 document.addEventListener('keydown', (e) => {
-  const typing = e.target.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey
+  const typing = EXPORT || e.target.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey
   if (e.key === 'Escape' && document.querySelector('.drawer.open') && !$('#newDialog').open) closeDrawers()
   else if (!typing && e.key === 'q') $('#queueBtn').click()
   else if (!typing && e.key === 'L') $('#logsBtn').click()
@@ -1111,6 +1173,15 @@ $('#logsClear').onclick = async () => { await api('/api/logs', { method: 'DELETE
   if (!config.claude) { model.disabled = $('#genChapters').disabled = true; $('#question').placeholder = 'Install the claude CLI to chat: claude.com/claude-code' }
   $('#wmodel').innerHTML = config.whisperModels.map((m) => `<option ${m === 'small' ? 'selected' : ''}>${m}</option>`).join('')
   $('#engine').innerHTML += config.engines.map((m) => `<option>${m}</option>`).join('')
+  if (EXPORT) {
+    // No Claude here: the chapters (or the notes) instead of the chat.
+    $('#chapStatus').textContent = 'Made by Claude from the transcript, before the export.'
+    $('#exportedTag').hidden = false
+    $('#exportedTag').textContent = `Exported ${new Date(EXPORT.exportedAt).toLocaleDateString()} · open the ZIP in video-context to ask Claude about it`
+    showTab(EXPORT.chapters.length ? 'chapters' : 'notes')
+    await loadList()
+    return
+  }
   $('#scope').value = store.get('scope', 'video')
   showTab(store.get('tab', 'chat'))
   $('#logFile').textContent = config.logFile ? `Also saved in ${config.logFile}` : ''

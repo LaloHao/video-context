@@ -136,6 +136,9 @@ and engine you pick; the queue shows each step's progress, and can cancel, retry
 - **Notes**: write one at the current time (`N`), bookmark it (`B`), or save an answer from the
   chat; they are kept next to the video (`notes.json`) and exported to Markdown with the
   chapters and the conversation.
+- **Export**: the video as a ZIP file with its transcript, frames, chapters, notes and an
+  `index.html` that opens without a server; dropped on another video-context, it is ready
+  without processing it again.
 
 The page listens only on 127.0.0.1. A tour with screenshots of each part: **[docs/ui.md](docs/ui.md)**.
 

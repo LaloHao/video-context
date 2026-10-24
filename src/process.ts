@@ -63,6 +63,8 @@ export interface Manifest {
   ocr?: { engine: 'tesseract'; languages: string[] } | { skipped: string } | null
   /** From the recording file next to the video (`<name>.json`), when there is one. */
   recording?: { url?: string; startedAt?: string; speakers: string[] }
+  /** Imported from an export of another machine instead of processed here. */
+  importedFrom?: { id: string; exportedAt?: string; originalName?: string }
 }
 
 export interface ProcessedVideo {

@@ -109,6 +109,32 @@ Errors in the page link to their entries ("See the logs"). Everything is also wr
 When Claude cannot answer, the error says why, and what to do when it can be fixed: an expired
 session is solved with `claude auth login` in a terminal.
 
+## Export and import
+
+![An exported video opened from its folder: no server, no Claude, the rest as in the page](images/ui-export.png)
+
+**Export** (at the top) downloads the open video as a ZIP file, to hand to someone who then
+needs nothing processed. Inside one folder:
+
+| File | What it is |
+| --- | --- |
+| `index.html` | This page with the video's data inside: open it from the folder, in any browser. Nothing to install, no server. |
+| `video.<ext>` | The video. |
+| `transcript.md`, `.srt`, `.json` | The transcript with its times. |
+| `frames/` | The key frames. |
+| `chapters.json`, `notes.json` | The chapters and the notes. |
+| `manifest.json`, `video-context.json` | What video-context needs to import it back. |
+
+The exported page plays the video with the transcript following it, its subtitles (CC), the
+key frames, the chapters and the search; notes can be added there (they stay in that browser,
+and **Export Markdown** takes them out), and clips marked and played. Asking Claude, the queue,
+the logs, generating chapters and downloading clips need the server, and are not there.
+
+To add an export to video-context: **+ New video** and drop the ZIP file (or type its path).
+The video is copied to `~/.cache/video-context/imports` and is ready at once, with its
+chapters and notes, without processing it again. The ZIP is written as it downloads (a large
+video is not copied first), and files past 4 GB are fine (ZIP64).
+
 ## Keys
 
 | Key | Does |

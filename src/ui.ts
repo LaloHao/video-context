@@ -5,15 +5,17 @@
 // so it uses the user's own login and can search the transcript and look at frames.
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { basename, extname, join, normalize, resolve } from 'node:path'
+import { basename, dirname, extname, join, normalize, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 import { ENGINES, findBinary, homeDir, MODELS, type Engine, type ModelName } from './deps.js'
+import { exportArchive, importArchive } from './export.js'
 import { Log } from './log.js'
+import { writeZip } from './zip.js'
 import { cleanChapters, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
 import { listVideos, loadVideo, processVideo, videoId } from './process.js'
 import { Queue, type JobOptions } from './queue.js'
@@ -429,6 +431,25 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return json(res, 200, readNotes(video.dir))
     }
     if (req.method === 'GET' && parts[3] === 'clip') return clip(req, res, video.manifest.id, url)
+    if (req.method === 'GET' && parts[3] === 'export') {
+      // Streamed as it is written: a large video is never copied first.
+      const { name, entries } = exportArchive(video.manifest.id, readFileSync(PAGE, 'utf8'))
+      const started = Date.now()
+      log.info('export', `Exporting "${video.manifest.title}" (${entries.length} files)`)
+      res.writeHead(200, {
+        'content-type': 'application/zip',
+        'content-disposition': `attachment; filename="${name.replace(/[^\w.\- ]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        'cache-control': 'no-store'
+      })
+      try {
+        await writeZip(entries, res)
+        log.info('export', `Exported "${video.manifest.title}" in ${((Date.now() - started) / 1000).toFixed(1)} s`)
+      } catch (error) {
+        log.error('export', `Export of "${video.manifest.title}" failed`, error instanceof Error ? error.stack : String(error))
+      }
+      res.end()
+      return
+    }
     if (req.method === 'GET' && parts[3] === 'media') {
       if (!existsSync(video.manifest.source)) return json(res, 404, { error: 'The video file is no longer there.' })
       return sendFile(req, res, video.manifest.source)
@@ -483,6 +504,23 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const file = typeof body.path === 'string' ? resolve(body.path.replace(/^~(?=\/|$)/, process.env.HOME ?? '~')) : ''
     if (!file || !existsSync(file) || !statSync(file).isFile()) return json(res, 400, { error: `${file || 'The path'} does not exist.` })
     return json(res, 200, queue.add(file, videoId(file), processOptions(body)))
+  }
+
+  if (req.method === 'POST' && parts[1] === 'import') {
+    const body = await readJson(req)
+    const file = typeof body.path === 'string' ? resolve(body.path.replace(/^~(?=\/|$)/, process.env.HOME ?? '~')) : ''
+    if (!file || !existsSync(file)) return json(res, 400, { error: `${file || 'The path'} does not exist.` })
+    try {
+      const result = await importArchive(file)
+      log.info('import', result.already ? `"${result.title}" was already imported` : `Imported "${result.title}" from ${basename(file)}`)
+      // An uploaded archive is not needed once imported (the video is out of it).
+      if (dirname(file) === join(homeDir(), 'uploads')) rmSync(file, { force: true })
+      return json(res, 200, result)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log.error('import', `Could not import ${basename(file)}: ${message}`, error instanceof Error ? error.stack : undefined)
+      return json(res, 400, { error: message })
+    }
   }
 
   if (req.method === 'POST' && parts[1] === 'chat') return chat(req, res, await readJson(req))
