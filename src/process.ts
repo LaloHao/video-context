@@ -183,6 +183,7 @@ async function transcribe(tools: Tools, model: string, dir: string, language: st
 
 /** Key frames: scene changes plus one every `frameEvery` s, near-duplicates dropped. One ffmpeg pass writes them and a 9×8 gray thumbnail of each. */
 async function extractFrames(tools: Tools, file: string, dir: string, opts: ProcessOptions): Promise<{ frames: Frame[]; dropped: number }> {
+  opts.onProgress?.({ stage: 'frames', message: 'Extracting key frames…' })
   const framesDir = join(dir, 'frames')
   rmSync(framesDir, { recursive: true, force: true })
   mkdirSync(framesDir, { recursive: true })

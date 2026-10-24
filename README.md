@@ -118,8 +118,9 @@ npx -p @lalohao/video-context video-context-ui --open
 
 A page on `http://localhost:4317` to watch a processed video next to its transcript: the
 current line follows the player, a click on a line or a key frame seeks there, and the search
-finds words said or shown on screen, in this video or in all of them. **+ New video** processes
-a file (dropped on the page or by path) with the language, whisper model and engine you pick.
+finds words said or shown on screen, in this video or in all of them. **+ New video** adds
+files (dropped on the page or by path) to a processing queue, with the language, whisper model
+and engine you pick; the queue shows each step's progress, and can cancel, retry or reorder.
 
 ![The page: the video, its chapters and key frames, the transcript following the player, and Claude's answer with the frame it looked at and links to each moment](docs/images/ui-chat.png)
 

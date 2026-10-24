@@ -14,7 +14,8 @@ import { parseArgs } from 'node:util'
 
 import { ENGINES, findBinary, homeDir, MODELS, type Engine, type ModelName } from './deps.js'
 import { cleanChapters, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
-import { listVideos, loadVideo, processVideo, videoId, type Progress } from './process.js'
+import { listVideos, loadVideo, processVideo, videoId } from './process.js'
+import { Queue, type JobOptions } from './queue.js'
 import { formatTime, parseTime } from './time.js'
 import { spoken } from './transcript.js'
 
@@ -48,14 +49,7 @@ const CLAUDE_MODELS = ['sonnet', 'opus', 'fable', 'haiku']
 /** The transcript goes whole into the prompt up to this size; longer ones are read with the MCP tools. */
 const MAX_INLINE_TRANSCRIPT = 60_000
 
-interface Job {
-  id: string
-  name: string
-  progress: Progress
-  error?: string
-  startedAt: number
-}
-const jobs = new Map<string, Job>()
+const queue = new Queue(processVideo, join(homeDir(), 'queue.json'))
 const chats = new Set<ChildProcess>()
 
 const MIME: Record<string, string> = {
@@ -97,20 +91,6 @@ function sendFile(req: IncomingMessage, res: ServerResponse, file: string): void
   }
   res.writeHead(200, { 'content-type': type, 'content-length': size, 'accept-ranges': 'bytes' })
   createReadStream(file).pipe(res)
-}
-
-function startJob(file: string, opts: { language?: string; model?: ModelName; engine?: Engine; force?: boolean }): Job {
-  const id = videoId(file)
-  const running = jobs.get(id)
-  if (running && !running.error && running.progress.stage !== 'done') return running
-  const job: Job = { id, name: basename(file), progress: { stage: 'audio', message: 'Starting…' }, startedAt: Date.now() }
-  jobs.set(id, job)
-  processVideo(file, { ...opts, onProgress: (p) => (job.progress = p) })
-    .then(() => (job.progress = { stage: 'done', message: 'Done.' }))
-    .catch((error: unknown) => {
-      job.error = error instanceof Error ? error.message : String(error)
-    })
-  return job
 }
 
 const VIDEO_TOOLS = ['search_transcript', 'get_transcript', 'get_frames', 'list_frames', 'list_videos', 'search_videos']
@@ -352,7 +332,7 @@ async function upload(req: IncomingMessage, res: ServerResponse, url: URL): Prom
   json(res, 200, { path: target })
 }
 
-function processOptions(body: Record<string, unknown>): { language?: string; model?: ModelName; engine?: Engine; force?: boolean } {
+function processOptions(body: Record<string, unknown>): JobOptions {
   const language = typeof body.language === 'string' && /^(auto|[a-z]{2,3})$/.test(body.language) ? body.language : undefined
   const model = (MODELS as readonly string[]).includes(String(body.model)) ? (body.model as ModelName) : undefined
   const engine = (ENGINES as readonly string[]).includes(String(body.engine)) ? (body.engine as Engine) : undefined
@@ -425,7 +405,19 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
   }
 
-  if (req.method === 'GET' && parts[1] === 'jobs') return json(res, 200, [...jobs.values()])
+  if (parts[1] === 'jobs') {
+    if (req.method === 'GET' && parts.length === 2) return json(res, 200, { jobs: queue.list(), now: Date.now() })
+    if (req.method === 'POST' && parts[2] === 'clear') {
+      queue.clearFinished()
+      return json(res, 200, { jobs: queue.list(), now: Date.now() })
+    }
+    const id = parts[2] ?? ''
+    if (!queue.get(id)) return json(res, 404, { error: 'No such job.' })
+    if (req.method === 'POST' && parts[3] === 'cancel') return json(res, 200, queue.cancel(id))
+    if (req.method === 'POST' && parts[3] === 'retry') return json(res, 200, queue.retry(id))
+    if (req.method === 'POST' && parts[3] === 'top') return json(res, 200, queue.moveToFront(id))
+    if (req.method === 'DELETE' && parts.length === 3) return json(res, queue.remove(id) ? 200 : 409, { removed: id })
+  }
 
   if (req.method === 'GET' && parts[1] === 'search') {
     const query = url.searchParams.get('q') ?? ''
@@ -438,7 +430,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await readJson(req)
     const file = typeof body.path === 'string' ? resolve(body.path.replace(/^~(?=\/|$)/, process.env.HOME ?? '~')) : ''
     if (!file || !existsSync(file) || !statSync(file).isFile()) return json(res, 400, { error: `${file || 'The path'} does not exist.` })
-    return json(res, 200, startJob(file, processOptions(body)))
+    return json(res, 200, queue.add(file, videoId(file), processOptions(body)))
   }
 
   if (req.method === 'POST' && parts[1] === 'chat') return chat(req, res, await readJson(req))
@@ -470,5 +462,6 @@ server.listen(PORT, '127.0.0.1', () => {
 for (const signal of ['SIGINT', 'SIGTERM'] as const)
   process.on(signal, () => {
     for (const child of chats) child.kill('SIGTERM')
+    queue.stop()
     process.exit(0)
   })

@@ -7,13 +7,13 @@
 <style>
 :root {
   --bg: #f6f6f4; --panel: #ffffff; --line: #e3e2de; --text: #1d1d1b; --muted: #6b6a66;
-  --accent: #c2410c; --accent-soft: #fdeee6; --hit: #f5c400; --hit-soft: #fff1a8; --err: #b91c1c;
+  --accent: #c2410c; --accent-soft: #fdeee6; --hit: #f5c400; --hit-soft: #fff1a8; --err: #b91c1c; --ok: #15803d;
   --chap-a: #ecebe6; --chap-b: #dedcd5; --note: #2563eb;
   --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #151514; --panel: #1f1f1d; --line: #33322f; --text: #ecebe7; --muted: #9a9993;
-    --accent: #fb923c; --accent-soft: #3a2518; --hit: #facc15; --hit-soft: #5c4d00; --err: #f87171;
+    --accent: #fb923c; --accent-soft: #3a2518; --hit: #facc15; --hit-soft: #5c4d00; --err: #f87171; --ok: #4ade80;
     --chap-a: #2b2a27; --chap-b: #373632; --note: #60a5fa; }
 }
 * { box-sizing: border-box; }
@@ -38,9 +38,12 @@ header { display: flex; align-items: center; gap: 10px; padding: 8px 16px; borde
 header h1 { font-size: 15px; margin: 0 6px 0 0; font-weight: 650; letter-spacing: -.01em; }
 header h1 span { color: var(--accent); }
 #videoSelect { min-width: 0; max-width: 360px; flex: 1 1 200px; }
-#jobs { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
-.job { background: var(--accent-soft); border-radius: 999px; padding: 3px 10px; }
-.job.err { color: var(--err); }
+#queueBtn { position: relative; display: flex; align-items: center; gap: 8px; max-width: 360px; overflow: hidden; }
+#queueBtn .badge { background: var(--accent); color: #fff; border-radius: 999px; font-size: 11px; padding: 0 6px; min-width: 18px; text-align: center; }
+#queueBtn .badge:empty { display: none; }
+#queueSummary { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#queueSummary:empty { display: none; }
+#queueBtn .mini { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); transition: width .5s; }
 .spacer { flex: 1; }
 header label { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 
@@ -153,7 +156,36 @@ dialog h2 { margin: 0 0 12px; font-size: 16px; }
 .row > label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); flex: 1 1 120px; }
 .row input[type=text] { flex: 1; }
 progress { width: 100%; accent-color: var(--accent); }
-#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 10; max-width: calc(100vw - 32px); }
+#queue { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.18); z-index: 20; display: flex; flex-direction: column; transform: translateX(105%); transition: transform .2s ease; }
+#queue.open { transform: none; }
+#queue .pane-head h2 { font-size: 15px; margin: 0; flex: 1; }
+#queueList { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.qsection { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 6px 2px 0; }
+.qjob { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.qjob.running { border-color: var(--accent); }
+.qtop { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.qname { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip { font-size: 11.5px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.chip.running { color: var(--accent); border-color: var(--accent); }
+.chip.done { color: var(--ok); border-color: var(--ok); }
+.chip.failed { color: var(--err); border-color: var(--err); }
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.step { font-size: 11.5px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+.step .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.step .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .5s; }
+.step.done { color: var(--text); }
+.step.done .bar i { background: var(--ok); width: 100%; }
+.step.active { color: var(--text); font-weight: 600; }
+.step.active.indet .bar i { width: 35%; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+.qmeta { font-size: 12px; color: var(--muted); display: flex; gap: 6px 12px; flex-wrap: wrap; }
+.qmsg { font-size: 12.5px; color: var(--muted); }
+.qmsg.err { color: var(--err); overflow-wrap: anywhere; }
+.qactions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+#queue .placeholder { margin: 40px auto; }
+#scrim { position: fixed; inset: 0; z-index: 19; background: rgba(0,0,0,.25); }
+#toast button { margin-left: 10px; background: none; border: 0; color: var(--accent); font-weight: 600; padding: 0; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 30; max-width: calc(100vw - 32px); }
 
 @media (max-width: 860px) {
   main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; overflow-y: auto; }
@@ -167,7 +199,7 @@ progress { width: 100%; accent-color: var(--accent); }
   <h1>video<span>·</span>context</h1>
   <select id="videoSelect" aria-label="Video"></select>
   <button class="btn primary" id="newBtn">+ New video</button>
-  <div id="jobs"></div>
+  <button class="btn" id="queueBtn" title="Processing queue (Q)">Queue <span class="badge" id="queueCount"></span><span id="queueSummary"></span><span class="mini" id="queueMini" style="width:0"></span></button>
   <span class="spacer"></span>
   <label>Claude <select id="model" aria-label="Claude model"></select></label>
   <span class="muted" style="font-size:12px" title="Space play/pause · J/L ±5 s · / search · N note · B bookmark · [ ] clip start/end">Keys: Space J L / N B [ ]</span>
@@ -252,14 +284,27 @@ progress { width: 100%; accent-color: var(--accent); }
 </main>
 
 <div id="selMenu"><button class="btn small primary" id="selAsk">Ask about this</button><button class="btn small" id="selNote">Note</button><button class="btn small" id="selClip">✂ Clip</button></div>
+<div id="scrim" hidden></div>
+<aside id="queue" aria-label="Processing queue" aria-hidden="true">
+  <div class="pane-head">
+    <h2>Processing queue</h2>
+    <button class="btn small primary" id="queueAdd">+ Add videos</button>
+    <button class="btn small" id="queueClose" title="Close (Esc)">×</button>
+  </div>
+  <div id="queueList"></div>
+  <div class="pane-head" style="border-top:1px solid var(--line);border-bottom:0">
+    <span class="muted" style="flex:1;font-size:12.5px">One video at a time, in order. The queue survives a restart.</span>
+    <button class="btn small" id="queueClear">Clear finished</button>
+  </div>
+</aside>
 <div id="toast" hidden></div>
 
 <dialog id="newDialog">
-  <h2>Process a video</h2>
-  <div id="drop">Drop a video or audio file here, or <label style="color:var(--accent);cursor:pointer;text-decoration:underline">choose one<input type="file" id="file" accept="video/*,audio/*,.mkv" hidden></label>
+  <h2>Add videos to the queue</h2>
+  <div id="drop">Drop video or audio files here, or <label style="color:var(--accent);cursor:pointer;text-decoration:underline">choose them<input type="file" id="file" accept="video/*,audio/*,.mkv" multiple hidden></label>
     <div id="fileName" class="muted"></div>
   </div>
-  <div class="row"><input type="text" id="path" placeholder="…or a path on this computer, e.g. ~/Videos/meeting.mp4"></div>
+  <div class="row"><textarea id="path" rows="2" style="flex:1;resize:vertical" placeholder="…or paths on this computer, one per line, e.g. ~/Videos/meeting.mp4"></textarea></div>
   <div class="row">
     <label>Language<select id="language">
       <option value="auto">Auto-detect</option><option value="es">Spanish</option><option value="en">English</option><option value="pt">Portuguese</option><option value="fr">French</option><option value="de">German</option><option value="it">Italian</option>
@@ -268,11 +313,12 @@ progress { width: 100%; accent-color: var(--accent); }
     <label>Engine<select id="engine"><option value="">Default</option></select></label>
   </div>
   <div class="row"><label class="check" style="flex-direction:row;color:var(--text)"><input type="checkbox" id="force"> Process again if already processed</label></div>
+  <div id="uploadLabel" class="muted" style="font-size:12.5px" hidden></div>
   <progress id="uploadBar" value="0" max="100" hidden></progress>
   <div id="newErr" class="err"></div>
   <div class="row" style="justify-content:flex-end;margin:12px 0 0">
     <button class="btn" id="cancelNew" type="button">Cancel</button>
-    <button class="btn primary" id="startNew" type="button">Process</button>
+    <button class="btn primary" id="startNew" type="button">Add to queue</button>
   </div>
 </dialog>
 
@@ -290,7 +336,11 @@ const fold = (s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 const frameUrl = (id, f) => `/api/videos/${id}/frames/${encodeURIComponent(f.file.split('/').pop())}`
 const indexAt = (list, t, key) => { let lo = 0, hi = list.length - 1, ans = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (key(list[mid]) <= t) { ans = mid; lo = mid + 1 } else hi = mid - 1 } return ans }
 let toastTimer
-function toast(text) { const t = $('#toast'); t.textContent = text; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3500) }
+function toast(text, action, onAction) {
+  const t = $('#toast'); t.textContent = text; t.hidden = false
+  if (action) { const b = document.createElement('button'); b.textContent = action; b.onclick = () => { t.hidden = true; onAction() }; t.appendChild(b) }
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), action ? 8000 : 3500)
+}
 
 const player = $('#player')
 let config = { claudeModels: ['sonnet'], whisperModels: [], engines: [] }
@@ -777,25 +827,30 @@ document.addEventListener('mouseup', (e) => setTimeout(() => {
   $('#selClip').onclick = () => { done(); setClip(start, end); toast(`Clip ${fmt(start)}–${fmt(end)}: export it under the player.`) }
 }))
 
-// ---------- new video ----------
-let chosenFile = null
-function openNew() { chosenFile = null; $('#fileName').textContent = ''; $('#path').value = ''; $('#newErr').textContent = ''; $('#uploadBar').hidden = true; $('#newDialog').showModal() }
+// ---------- new videos ----------
+let chosenFiles = []
+function openNew() { chosenFiles = []; $('#fileName').textContent = ''; $('#path').value = ''; $('#newErr').textContent = ''; $('#uploadBar').hidden = $('#uploadLabel').hidden = true; $('#newDialog').showModal() }
 $('#newBtn').onclick = openNew
+$('#queueAdd').onclick = openNew
 $('#cancelNew').onclick = () => $('#newDialog').close()
-const choose = (f) => { if (!f) return; chosenFile = f; $('#fileName').textContent = `${f.name} · ${(f.size / 1e6).toFixed(1)} MB`; $('#path').value = '' }
-$('#file').addEventListener('change', (e) => choose(e.target.files[0]))
+const choose = (files) => {
+  chosenFiles = [...files].filter((f) => f.size > 0)
+  const mb = chosenFiles.reduce((a, f) => a + f.size, 0) / 1e6
+  $('#fileName').textContent = chosenFiles.length ? (chosenFiles.length === 1 ? `${chosenFiles[0].name} · ${mb.toFixed(1)} MB` : `${chosenFiles.length} files · ${mb.toFixed(1)} MB`) : ''
+}
+$('#file').addEventListener('change', (e) => choose(e.target.files))
 const drop = $('#drop')
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over') })
 drop.addEventListener('dragleave', () => drop.classList.remove('over'))
-drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); choose(e.dataTransfer.files[0]) })
-$('#path').addEventListener('input', () => { if ($('#path').value) { chosenFile = null; $('#fileName').textContent = '' } })
+drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); choose(e.dataTransfer.files) })
 
-function uploadFile(file) {
+function uploadFile(file, label) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `/api/upload?name=${encodeURIComponent(file.name)}`)
     xhr.setRequestHeader('x-video-context', '1')
     const bar = $('#uploadBar'); bar.hidden = false; bar.value = 0
+    $('#uploadLabel').hidden = false; $('#uploadLabel').textContent = label
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.value = (e.loaded / e.total) * 100 }
     xhr.onload = () => { const body = JSON.parse(xhr.responseText); xhr.status === 200 ? resolve(body.path) : reject(new Error(body.error)) }
     xhr.onerror = () => reject(new Error('Upload failed.'))
@@ -804,29 +859,131 @@ function uploadFile(file) {
 }
 $('#startNew').onclick = async () => {
   const btn = $('#startNew'); btn.disabled = true; $('#newErr').textContent = ''
+  const options = { language: $('#language').value, model: $('#wmodel').value, engine: $('#engine').value || undefined, force: $('#force').checked }
+  const errors = []
+  let added = 0
   try {
-    let path = $('#path').value.trim()
-    if (chosenFile) path = await uploadFile(chosenFile)
-    if (!path) throw new Error('Choose a file or type a path.')
-    const res = await api('/api/process', { method: 'POST', body: JSON.stringify({ path, language: $('#language').value, model: $('#wmodel').value, engine: $('#engine').value || undefined, force: $('#force').checked }) })
-    const body = await res.json()
-    if (!res.ok) throw new Error(body.error)
+    const paths = $('#path').value.split('\n').map((p) => p.trim()).filter(Boolean)
+    if (!paths.length && !chosenFiles.length) throw new Error('Choose files or type a path.')
+    const add = async (path) => {
+      const res = await api('/api/process', { method: 'POST', body: JSON.stringify({ path, ...options }) })
+      const body = await res.json()
+      if (res.ok) added++; else errors.push(body.error)
+    }
+    for (const path of paths) await add(path)
+    for (const [i, file] of chosenFiles.entries()) await add(await uploadFile(file, `Uploading ${chosenFiles.length > 1 ? `${i + 1}/${chosenFiles.length} ` : ''}${file.name}…`))
+    if (errors.length) throw new Error(errors.join(' '))
     $('#newDialog').close()
-    watchJobs()
   } catch (err) { $('#newErr').textContent = err.message }
-  finally { btn.disabled = false }
+  finally {
+    btn.disabled = false; $('#uploadBar').hidden = $('#uploadLabel').hidden = true
+    if (added) { toast(`${added} video${added === 1 ? '' : 's'} added to the queue.`); openQueue() }
+  }
 }
 
-let jobsTimer = null, knownDone = new Set()
+// ---------- queue ----------
+let jobs = [], skew = 0, jobsTimer = null, lastStates = null
+const active = (j) => j.state === 'queued' || j.state === 'running'
+const dur = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s` : `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min` }
+const serverNow = () => Date.now() - skew
+
+// The four parts of processing: what is done, what is running and how far.
+function steps(j) {
+  const finished = j.state === 'done'
+  const prepDone = finished || j.transcribe !== undefined || j.frames
+  const tDone = finished || j.transcribe === 100
+  const fDone = finished || j.ocr !== undefined
+  const oDone = finished || j.ocr === 100
+  const running = j.state === 'running'
+  return [
+    { label: j.stage === 'model' ? 'Model' : 'Audio', done: prepDone, active: running && !prepDone, pct: null },
+    { label: j.transcribe !== undefined && !tDone ? `Transcribe ${j.transcribe}%` : 'Transcribe', done: tDone, active: running && j.transcribe !== undefined && !tDone, pct: j.transcribe },
+    { label: 'Key frames', done: fDone, active: running && j.frames && !fDone, pct: null },
+    { label: j.ocr !== undefined && !oDone ? `Screen text ${j.ocr}%` : 'Screen text', done: oDone, active: running && j.ocr !== undefined && !oDone, pct: j.ocr }
+  ]
+}
+function overall(j) {
+  if (j.state === 'done') return 100
+  if (j.state !== 'running') return 0
+  const st = steps(j)
+  return Math.round((st[0].done ? 5 : 0) + (j.transcribe ?? 0) * 0.8 + (st[2].done ? 5 : 0) + (j.ocr ?? 0) * 0.1)
+}
+function eta(j) {
+  if (j.state !== 'running' || !j.transcribeStartedAt || !(j.transcribe > 2) || j.transcribe >= 100) return ''
+  const elapsed = serverNow() - j.transcribeStartedAt
+  return `about ${dur((elapsed / j.transcribe) * (100 - j.transcribe))} left`
+}
+function jobHtml(j, position) {
+  const opts = [j.options.language && j.options.language !== 'auto' ? j.options.language : 'auto language', j.options.model ?? 'small', j.options.engine ?? 'default engine', j.options.force ? 'again' : ''].filter(Boolean).join(' · ')
+  const chip = { queued: `#${position} in line`, running: `${overall(j)}%`, done: j.cached ? 'Already processed' : 'Ready', failed: 'Failed', canceled: 'Canceled' }[j.state]
+  const time = j.state === 'running' ? `${dur(serverNow() - j.startedAt)} so far` : j.state === 'done' && j.startedAt && !j.cached ? `took ${dur(j.finishedAt - j.startedAt)}` : j.state === 'queued' ? `added ${new Date(j.addedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''
+  const st = j.state === 'running' ? `<div class="steps">${steps(j).map((s) => `<div class="step ${s.done ? 'done' : ''} ${s.active ? 'active' : ''} ${s.active && !s.pct ? 'indet' : ''}"><span>${esc(s.label)}</span><span class="bar"><i style="width:${s.done ? 100 : s.pct ?? 0}%"></i></span></div>`).join('')}</div>` : ''
+  // While preparing, the message says what (a model download, the audio); after that the steps say it.
+  const msg = j.error ? `<div class="qmsg err">${esc(j.error)}</div>` : j.state === 'running' && j.message && !steps(j)[0].done ? `<div class="qmsg">${esc(j.message)}</div>` : ''
+  const acts = {
+    queued: `${position > 1 ? `<button class="btn small" data-act="top">Move to front</button>` : ''}<button class="btn small" data-act="cancel">Remove</button>`,
+    running: `<button class="btn small" data-act="cancel">Cancel</button>`,
+    done: `<button class="btn small primary" data-act="open">Open</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
+    failed: `<button class="btn small" data-act="retry">Retry</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
+    canceled: `<button class="btn small" data-act="retry">Process again</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`
+  }[j.state]
+  return `<div class="qjob ${j.state}" data-id="${j.id}">
+    <div class="qtop"><span class="qname" title="${esc(j.path)}">${esc(j.name)}</span><span class="chip ${j.state}">${chip}</span></div>
+    ${st}${msg}
+    <div class="qtop"><div class="qmeta"><span>${esc(opts)}</span>${time ? `<span>${time}</span>` : ''}${eta(j) ? `<span>${eta(j)}</span>` : ''}</div><span class="spacer"></span><div class="qactions">${acts}</div></div>
+  </div>`
+}
+function renderQueue() {
+  const running = jobs.filter((j) => j.state === 'running'), waiting = jobs.filter((j) => j.state === 'queued')
+  const finished = jobs.filter((j) => !active(j)).sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
+  const section = (title, list, offset = 0) => (list.length ? `<div class="qsection">${title}</div>` + list.map((j, i) => jobHtml(j, i + 1 + offset)).join('') : '')
+  $('#queueList').innerHTML = jobs.length
+    ? section('Processing', running) + section(`Waiting · ${waiting.length}`, waiting) + section('Finished', finished)
+    : `<p class="placeholder muted">Nothing in the queue. Add videos and they are processed one after another: transcript, key frames and the text on screen.</p>`
+  $('#queueClear').disabled = !finished.length
+  // The button in the header: how many, and the one running.
+  const n = running.length + waiting.length
+  $('#queueCount').textContent = n || ''
+  const r = running[0]
+  $('#queueSummary').textContent = r ? `${r.name} · ${overall(r)}%${waiting.length ? ` · +${waiting.length}` : ''}` : ''
+  $('#queueMini').style.width = r ? `${overall(r)}%` : '0'
+}
 async function watchJobs() {
   clearTimeout(jobsTimer)
-  const list = await (await api('/api/jobs')).json()
-  $('#jobs').innerHTML = list.filter((j) => j.error || j.progress.stage !== 'done').map((j) => `<span class="job ${j.error ? 'err' : ''}" title="${esc(j.error || j.progress.message)}">${esc(j.name)}: ${esc(j.error ? 'failed — ' + j.error.slice(0, 80) : j.progress.message)}</span>`).join('')
-  let finished = null
-  for (const j of list) if (j.progress.stage === 'done' && !j.error && !knownDone.has(j.id)) { knownDone.add(j.id); finished = j.id }
-  if (finished) await loadList(finished)
-  if (list.some((j) => !j.error && j.progress.stage !== 'done')) jobsTimer = setTimeout(watchJobs, 1000)
+  try {
+    const body = await (await api('/api/jobs')).json()
+    jobs = body.jobs; skew = Date.now() - body.now
+    const states = new Map(jobs.map((j) => [j.id, j.state]))
+    if (lastStates) for (const j of jobs) {
+      if (lastStates.get(j.id) === j.state || !lastStates.has(j.id) && !active(j)) continue
+      if (j.state === 'done') { await loadList(current ? current.manifest.id : j.videoId); toast(`Ready: ${j.name}`, 'Open', () => openVideo(j.videoId)) }
+      else if (j.state === 'failed') toast(`Failed: ${j.name}`, 'Details', openQueue)
+    }
+    lastStates = states
+    renderQueue()
+  } catch {}
+  const busy = jobs.some(active)
+  jobsTimer = setTimeout(watchJobs, busy ? 1000 : $('#queue').classList.contains('open') ? 2000 : 10000)
 }
+$('#queueList').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-act]'); if (!b) return
+  const id = b.closest('.qjob').dataset.id, act = b.dataset.act, job = jobs.find((j) => j.id === id)
+  if (act === 'open') { closeQueue(); return openVideo(job.videoId) }
+  if (act === 'cancel' && job.state === 'running' && !confirm(`Stop processing ${job.name}? What was done so far is lost.`)) return
+  b.disabled = true
+  await api(act === 'remove' ? `/api/jobs/${id}` : `/api/jobs/${id}/${act}`, { method: act === 'remove' ? 'DELETE' : 'POST' })
+  watchJobs()
+})
+$('#queueClear').onclick = async () => { await api('/api/jobs/clear', { method: 'POST' }); watchJobs() }
+function openQueue() { $('#queue').classList.add('open'); $('#queue').setAttribute('aria-hidden', 'false'); $('#scrim').hidden = false; watchJobs() }
+function closeQueue() { $('#queue').classList.remove('open'); $('#queue').setAttribute('aria-hidden', 'true'); $('#scrim').hidden = true }
+$('#queueBtn').onclick = () => ($('#queue').classList.contains('open') ? closeQueue() : openQueue())
+$('#queueClose').onclick = closeQueue
+$('#scrim').onclick = closeQueue
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#queue').classList.contains('open') && !$('#newDialog').open) closeQueue()
+  else if (e.key === 'q' && !e.target.closest('input, textarea, select, [contenteditable]') && !e.metaKey && !e.ctrlKey && !e.altKey) $('#queueBtn').click()
+})
 
 // ---------- start ----------
 ;(async () => {
@@ -839,8 +996,6 @@ async function watchJobs() {
   $('#engine').innerHTML += config.engines.map((m) => `<option>${m}</option>`).join('')
   $('#scope').value = store.get('scope', 'video')
   showTab(store.get('tab', 'chat'))
-  const jobs = await (await api('/api/jobs')).json()
-  for (const j of jobs) if (j.progress.stage === 'done') knownDone.add(j.id)
   await loadList()
   if (scope() === 'library') $('#scope').dispatchEvent(new Event('change'))
   watchJobs()

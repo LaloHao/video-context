@@ -67,12 +67,28 @@ transcript and in the **Chapters** tab; the current one is named under the playe
   the deadline?"*). Claude finds the videos with the `search_videos` tool and cites each moment
   with the video's label, `[V2 0:19]`: the link opens that video there.
 
-## Processing a video
+## Processing videos: the queue
 
-**+ New video** takes a file dropped on the dialog (it is copied to
-`~/.cache/video-context/uploads`) or a path on this computer, with the spoken language, the
-whisper model and the engine. The progress shows at the top, and the video opens when it is
-ready.
+![The queue: one video processing with the progress of each step, one waiting and one ready](images/ui-queue.png)
+
+**+ New video** adds videos to the queue: files dropped on the dialog (several at once; they
+are copied to `~/.cache/video-context/uploads`) or paths on this computer, one per line, with
+the spoken language, the whisper model and the engine. Videos are processed one at a time, in
+order, since whisper already uses every core.
+
+The **Queue** button at the top (or `Q`) says how many are left and how far the current one
+is, and opens the queue:
+
+- The video **processing** shows each step — the audio (or a model download), the
+  transcription, the key frames and the text on screen — with its progress, the time so far
+  and an estimate of the time left. **Cancel** stops it.
+- Videos **waiting** show their place in line: **Move to front** or **Remove**.
+- **Finished** ones: **Open** a ready video, **Retry** a failed one (its error is shown) or
+  **Process again** a canceled one. **Clear finished** empties that part of the list.
+
+A video already processed is ready at once. A message says when each video is ready (and
+opens it if none is open). The queue is kept in `~/.cache/video-context/queue.json`: if the
+page's server stops, the video that was processing starts again, and the rest wait their turn.
 
 ## Keys
 
@@ -84,6 +100,7 @@ ready.
 | `N` | Write a note at this time |
 | `B` | Bookmark this time |
 | `[` / `]` | Clip start / end at this time |
+| `Q` | Open or close the queue |
 
 ## Privacy
 
