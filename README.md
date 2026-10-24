@@ -136,6 +136,9 @@ and engine you pick; the queue shows each step's progress, and can cancel, retry
 - **Notes**: write one at the current time (`N`), bookmark it (`B`), or save an answer from the
   chat; they are kept next to the video (`notes.json`) and exported to Markdown with the
   chapters and the conversation.
+- **Queue and logs**: videos are processed one after another, each step with its progress; a
+  video stopped halfway (even by a crash) goes on from the steps it finished. The logs say
+  what failed and how to fix it.
 - **Export**: the video as a ZIP file with its transcript, frames, chapters, notes and an
   `index.html` that opens without a server; dropped on another video-context, it is ready
   without processing it again.

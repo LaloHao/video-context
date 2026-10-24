@@ -9,6 +9,7 @@ import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSyn
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, dirname, extname, join, normalize, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -404,7 +405,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (parts[0] !== 'api') return json(res, 404, { error: 'Not found.' })
 
   if (req.method === 'GET' && parts[1] === 'config' && parts.length === 2)
-    return json(res, 200, { claudeModels: CLAUDE_MODELS, whisperModels: MODELS, engines: ENGINES, claude: Boolean(claudeBinary()), logFile: LOG_FILE })
+    return json(res, 200, { claudeModels: CLAUDE_MODELS, whisperModels: MODELS, engines: ENGINES, claude: Boolean(claudeBinary()), logFile: LOG_FILE.startsWith(homedir()) ? `~${LOG_FILE.slice(homedir().length)}` : LOG_FILE })
 
   if (req.method === 'GET' && parts[1] === 'videos' && parts.length === 2)
     return json(res, 200, listVideos().map((m) => ({ id: m.id, title: m.title, duration: m.duration, createdAt: m.createdAt, source: m.source, available: existsSync(m.source) })))
@@ -518,7 +519,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return json(res, 200, result)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      log.error('import', `Could not import ${basename(file)}: ${message}`, error instanceof Error ? error.stack : undefined)
+      log.error('import', `Could not import ${basename(file)}: ${message}`, file)
       return json(res, 400, { error: message })
     }
   }
