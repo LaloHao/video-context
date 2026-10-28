@@ -82,7 +82,11 @@ transcript and in the **Chapters** tab; the current one is named under the playe
 `~/.cache/video-context/uploads`) or paths on this computer, one per line, with the spoken
 language, the whisper model and the engine. A video or audio file goes to the processing
 queue; a video-context export (`.zip`, see [below](#export-and-import)) is imported as it is,
-with nothing to process. A file already processed is ready at once (tick **Process again** to
+with nothing to process. A recorder's `.json` (the meeting's title and who spoke when, see
+[Who said what](../README.md#who-said-what)) goes with its video: drop both, or give both
+paths. It is uploaded first and read when the video is processed; it is never queued itself.
+A video processed before its `.json` was next to it shows **Process again** in the queue, to
+add the speakers. A file already processed is ready at once (tick **Process again** to
 do it anyway).
 
 ## The queue

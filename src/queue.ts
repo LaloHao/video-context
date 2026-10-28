@@ -45,6 +45,8 @@ export interface Job {
   error?: string
   /** The tools started for it (the newest), to stop them if the server dies halfway. */
   pids?: number[]
+  /** Something to tell about it (a recording file it was processed without). */
+  hint?: string
 }
 
 export type Runner = (path: string, opts: ProcessOptions) => Promise<ProcessedVideo>

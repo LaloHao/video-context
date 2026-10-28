@@ -358,7 +358,7 @@ progress { width: 100%; accent-color: var(--accent); }
 <dialog id="newDialog">
   <h2>Add videos to the queue</h2>
   <div id="drop">Drop video or audio files here, or <label style="color:var(--accent);cursor:pointer;text-decoration:underline">choose them<input type="file" id="file" accept="video/*,audio/*,.mkv,.zip,application/zip" multiple hidden></label>
-    <div class="muted" style="font-size:12.5px;margin-top:4px">A video-context export (.zip) is imported as it is, without processing.</div>
+    <div class="muted" style="font-size:12.5px;margin-top:4px">A video-context export (.zip) is imported as it is, without processing. A recorder's <code>.json</code> goes with its video (same name): it gives the title and who spoke when.</div>
     <div id="fileName" class="muted"></div>
   </div>
   <div class="row"><textarea id="path" rows="2" style="flex:1;resize:vertical" placeholder="…or paths on this computer, one per line, e.g. ~/Videos/meeting.mp4"></textarea></div>
@@ -412,7 +412,8 @@ let toastTimer
 function toast(text, action, onAction) {
   const t = $('#toast'); t.textContent = text; t.hidden = false
   if (action) { const b = document.createElement('button'); b.textContent = action; b.onclick = () => { t.hidden = true; onAction() }; t.appendChild(b) }
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), action ? 8000 : 3500)
+  // Long enough to read: longer messages stay longer.
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), Math.max(action ? 8000 : 3500, text.length * 70))
 }
 
 const player = $('#player')
@@ -1005,7 +1006,7 @@ function uploadFile(file, label) {
 $('#startNew').onclick = async () => {
   const btn = $('#startNew'); btn.disabled = true; $('#newErr').textContent = ''
   const options = { language: $('#language').value, model: $('#wmodel').value, engine: $('#engine').value || undefined, force: $('#force').checked }
-  const errors = [], imported = []
+  const errors = [], imported = [], notes = []
   let added = 0
   try {
     const paths = $('#path').value.split('\n').map((p) => p.trim()).filter(Boolean)
@@ -1023,12 +1024,20 @@ $('#startNew').onclick = async () => {
       if (res.ok) imported.push(body); else errors.push(body.error)
     }
     const isZip = (name) => /\.zip$/i.test(name)
-    for (const path of paths) await (isZip(path) ? importZip(path) : add(path))
-    for (const [i, file] of chosenFiles.entries()) {
-      const path = await uploadFile(file, `Uploading ${chosenFiles.length > 1 ? `${i + 1}/${chosenFiles.length} ` : ''}${file.name}…`)
-      await (isZip(file.name) ? importZip(path) : add(path))
+    // A recorder's .json (title, who spoke when) is no video: it goes next to its video, which reads it.
+    const isJson = (name) => /\.json$/i.test(name)
+    const stem = (name) => name.split('/').pop().replace(/\.[^.]+$/, '')
+    const alone = [...paths, ...chosenFiles.map((f) => f.name)].filter((n) => isJson(n) && ![...paths, ...chosenFiles.map((f) => f.name)].some((m) => !isJson(m) && stem(m) === stem(n)))
+    // Uploaded first: the recording file is there before its video is processed.
+    const files = [...chosenFiles].sort((a, b) => Number(isJson(b.name)) - Number(isJson(a.name)))
+    for (const path of paths) if (!isJson(path)) await (isZip(path) ? importZip(path) : add(path))
+    for (const [i, file] of files.entries()) {
+      const path = await uploadFile(file, `Uploading ${files.length > 1 ? `${i + 1}/${files.length} ` : ''}${file.name}…`)
+      if (!isJson(file.name)) await (isZip(file.name) ? importZip(path) : add(path))
     }
+    if (alone.length) notes.push(`${alone.map((n) => n.split('/').pop()).join(', ')}: a recording file is read when its video (same name, same folder) is processed — add the video too.`)
     if (errors.length) throw new Error(errors.join(' '))
+    if (notes.length && !added && !imported.length) throw new Error(notes.join(' '))
     $('#newDialog').close()
   } catch (err) { $('#newErr').textContent = err.message }
   finally {
@@ -1038,7 +1047,7 @@ $('#startNew').onclick = async () => {
       await loadList(last.id); openVideo(last.id)
       toast(imported.length > 1 ? `${imported.length} videos imported.` : last.already ? `${last.title} was already here.` : `Imported ${last.title}: ready, nothing to process.`)
     }
-    if (added) { toast(`${added} video${added === 1 ? '' : 's'} added to the queue.`); openQueue() }
+    if (added) { toast(`${added} video${added === 1 ? '' : 's'} added to the queue.${notes.length ? ` ${notes.join(' ')}` : ''}`); openQueue() }
   }
 }
 
@@ -1080,11 +1089,11 @@ function jobHtml(j, position) {
   const time = j.state === 'running' ? `${dur(serverNow() - j.startedAt)} so far` : j.state === 'done' && j.startedAt && !j.cached ? `took ${dur(j.finishedAt - j.startedAt)}` : j.state === 'queued' ? `added ${new Date(j.addedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''
   const st = j.state === 'running' ? `<div class="steps">${steps(j).map((s) => `<div class="step ${s.done ? 'done' : ''} ${s.active ? 'active' : ''} ${s.active && !s.pct ? 'indet' : ''}"><span>${esc(s.label)}</span><span class="bar"><i style="width:${s.done ? 100 : s.pct ?? 0}%"></i></span></div>`).join('')}</div>` : ''
   // While preparing, the message says what (a model download, the audio); after that the steps say it.
-  const msg = j.error ? `<div class="qmsg err">${esc(j.error)}</div>` : j.state === 'running' && j.message && !steps(j)[0].done ? `<div class="qmsg">${esc(j.message)}</div>` : ''
+  const msg = j.error ? `<div class="qmsg err">${esc(j.error)}</div>` : j.hint && j.state === 'done' ? `<div class="qmsg">${esc(j.hint)}</div>` : j.state === 'running' && j.message && !steps(j)[0].done ? `<div class="qmsg">${esc(j.message)}</div>` : ''
   const acts = {
     queued: `${position > 1 ? `<button class="btn small" data-act="top">Move to front</button>` : ''}<button class="btn small" data-act="cancel">Remove</button>`,
     running: `<button class="btn small" data-act="cancel">Cancel</button>`,
-    done: `<button class="btn small primary" data-act="open">Open</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
+    done: `${j.hint ? `<button class="btn small" data-act="again">Process again</button>` : ''}<button class="btn small primary" data-act="open">Open</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
     failed: `<button class="btn small" data-act="logs">Logs</button><button class="btn small" data-act="retry">Retry</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`,
     canceled: `<button class="btn small" data-act="retry">Process again</button><button class="btn small" data-act="remove" title="Remove from the list">×</button>`
   }[j.state]
@@ -1117,7 +1126,8 @@ async function watchJobs() {
     const states = new Map(jobs.map((j) => [j.id, j.state]))
     if (lastStates) for (const j of jobs) {
       if (lastStates.get(j.id) === j.state || !lastStates.has(j.id) && !active(j)) continue
-      if (j.state === 'done') { await loadList(current ? current.manifest.id : j.videoId); toast(`Ready: ${j.name}`, 'Open', () => openVideo(j.videoId)) }
+      if (j.state === 'done' && j.hint) toast(j.hint, 'Process again', () => processAgain(j))
+      else if (j.state === 'done') { await loadList(current ? current.manifest.id : j.videoId); toast(`Ready: ${j.name}`, 'Open', () => openVideo(j.videoId)) }
       else if (j.state === 'failed') toast(`Failed: ${j.name}`, 'Details', openQueue)
     }
     lastStates = states
@@ -1130,12 +1140,20 @@ $('#queueList').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-act]'); if (!b) return
   const id = b.closest('.qjob').dataset.id, act = b.dataset.act, job = jobs.find((j) => j.id === id)
   if (act === 'open') { closeQueue(); return openVideo(job.videoId) }
+  if (act === 'again') return processAgain(job)
   if (act === 'logs') { $('#logSearch').value = job.name; return openLogs({ source: 'queue' }) }
   if (act === 'cancel' && job.state === 'running' && !confirm(`Stop processing ${job.name}? What was done so far is lost.`)) return
   b.disabled = true
   await api(act === 'remove' ? `/api/jobs/${id}` : `/api/jobs/${id}/${act}`, { method: act === 'remove' ? 'DELETE' : 'POST' })
   watchJobs()
 })
+// Process a finished video again (with its recording file, say): a new job, forced.
+async function processAgain(job) {
+  const res = await api('/api/process', { method: 'POST', body: JSON.stringify({ path: job.path, ...job.options, force: true }) })
+  const body = await res.json()
+  if (!res.ok) return toast(body.error)
+  toast(`${job.name}: processing again.`); openQueue()
+}
 $('#queueClear').onclick = async () => { await api('/api/jobs/clear', { method: 'POST' }); watchJobs() }
 // The side panels (queue, logs): one open at a time.
 function openDrawer(id) {

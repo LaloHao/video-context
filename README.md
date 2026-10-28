@@ -171,7 +171,8 @@ Times are seconds from the start of the video. Each transcript segment gets the 
 turns overlap it the most (or the nearest turn within 2 s). `source` is `captions` (the
 meeting's live captions) or `indicator` (a participant tile's audio-level animation, less
 reliable: used only when there are no caption turns). A video processed before its `.json`
-existed needs `--force`.
+existed needs `--force` (in the web page, **Process again** in the queue). In the web page,
+drop the video and its `.json` together.
 
 ## Environment variables
 

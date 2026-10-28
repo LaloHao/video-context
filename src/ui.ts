@@ -20,6 +20,7 @@ import { Log } from './log.js'
 import { writeZip } from './zip.js'
 import { cleanChapters, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
 import { listVideos, loadVideo, processVideo, videoId } from './process.js'
+import { parseRecording, readRecording } from './recording.js'
 import { Queue, type JobOptions } from './queue.js'
 import { formatTime, parseTime } from './time.js'
 import { spoken } from './transcript.js'
@@ -513,7 +514,33 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await readJson(req)
     const file = typeof body.path === 'string' ? resolve(body.path.replace(/^~(?=\/|$)/, process.env.HOME ?? '~')) : ''
     if (!file || !existsSync(file) || !statSync(file).isFile()) return json(res, 400, { error: `${file || 'The path'} does not exist.` })
-    return json(res, 200, queue.add(file, videoId(file), processOptions(body)))
+    // A recorder's .json next to its video is no video: it is read when the video is processed.
+    if (extname(file).toLowerCase() === '.json') {
+      let recording = false
+      try {
+        recording = parseRecording(JSON.parse(readFileSync(file, 'utf8'))) !== null
+      } catch {
+        /* not JSON */
+      }
+      return json(res, 400, {
+        recording,
+        error: recording
+          ? `${basename(file)} is the recording file of a video (its title, who spoke when): it is read when the video next to it, with the same name, is processed.`
+          : `${basename(file)} is not a video or audio file.`
+      })
+    }
+    const id = videoId(file)
+    const options = processOptions(body)
+    // Processed before its recording file was there: the speakers come only by processing it again.
+    const done = loadVideo(id)
+    const hint =
+      done && !options.force && !done.manifest.recording && readRecording(file)
+        ? `${basename(file)} was processed before its recording file (${basename(file, extname(file))}.json) was next to it: "Process again" adds who spoke when.`
+        : undefined
+    if (hint) log.warn('queue', hint)
+    const job = queue.add(file, id, options)
+    if (hint) job.hint = hint
+    return json(res, 200, job)
   }
 
   if (req.method === 'POST' && parts[1] === 'import') {
