@@ -202,6 +202,10 @@ existed needs `--force`.
   faster than whisper.cpp; on Linux, build whisper.cpp with CUDA for an NVIDIA GPU.
 - **The first video with mlx-whisper seems stuck at 0 %** — it is downloading the model from
   Hugging Face (once).
+- **`sh: video-context-ui: not found`** (or `video-context`, `video-context-mcp`) — `npx -p
+  @lalohao/video-context …` was run inside a clone of this repository: npx takes the folder's
+  own package for the published one, and its commands are not installed there. Run it from
+  any other folder, or, in the clone, use the [development commands](#development).
 
 ## Privacy
 
@@ -215,6 +219,15 @@ pnpm install
 pnpm check                                            # typecheck + unit tests
 VIDEO_CONTEXT_MODEL=/path/ggml-small.bin pnpm test    # also the end-to-end test (whisper.cpp)
 VIDEO_CONTEXT_ENGINE=mlx pnpm test                    # the end-to-end test with mlx-whisper
+```
+
+In a clone, run the commands from the build (`npx -p @lalohao/video-context …` does not work
+inside the repository, see [Troubleshooting](#troubleshooting)):
+
+```bash
+pnpm ui                                               # build, then the web page (video-context-ui)
+node dist/cli.js ./meeting.mp4 --language en          # video-context
+claude mcp add video-context-dev -- node "$PWD/dist/mcp.js"   # the MCP server from this clone
 ```
 
 ## License
