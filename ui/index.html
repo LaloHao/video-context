@@ -212,7 +212,7 @@ progress { width: 100%; accent-color: var(--accent); }
 #logs .filters input { flex: 1; min-width: 120px; }
 #scrim { position: fixed; inset: 0; z-index: 19; background: rgba(0,0,0,.25); }
 /* A page exported with its video: no server behind it. */
-.static #newBtn, .static #exportBtn, .static #queueBtn, .static #logsBtn, .static header label, .static #tabs [data-tab=chat], .static #genChapters,
+.static #newBtn, .static #exportBtn, .static #reprocessBtn, .static #queueBtn, .static #logsBtn, .static header label, .static #tabs [data-tab=chat], .static #genChapters,
 .static #clipMp4, .static #clipGif, .static #searchAllLabel, .static #selAsk, .static #videoSelect { display: none !important; }
 /* One video in an exported page: its title instead of the list. */
 #videoTitle { display: none; font-weight: 600; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -234,6 +234,7 @@ progress { width: 100%; accent-color: var(--accent); }
   <h1>video<span>·</span>context</h1>
   <select id="videoSelect" aria-label="Video"></select>
   <span id="videoTitle"></span>
+  <button class="btn" id="reprocessBtn" title="Process this video again: its transcript, key frames and text on screen. Its chapters and notes are kept.">Process again</button>
   <button class="btn" id="exportBtn" title="Download this video as a ZIP: the video, its transcript, frames, chapters and notes, and a page that opens without a server. video-context imports it back without processing.">Export</button>
   <button class="btn primary" id="newBtn">+ New video</button>
   <span id="exportedTag" hidden></span>
@@ -372,6 +373,7 @@ progress { width: 100%; accent-color: var(--accent); }
     <label>Engine<select id="engine"><option value="">Default</option></select></label>
   </div>
   <div class="row"><label class="check" style="flex-direction:row;color:var(--text)"><input type="checkbox" id="force"> Process again if already processed</label></div>
+  <div id="reprocessNote" class="muted" style="font-size:12.5px;margin-bottom:8px" hidden></div>
   <div id="uploadLabel" class="muted" style="font-size:12.5px" hidden></div>
   <progress id="uploadBar" value="0" max="100" hidden></progress>
   <div id="newErr" class="err"></div>
@@ -510,6 +512,20 @@ $('#download').addEventListener('change', (e) => {
   if (e.target.value && current) EXPORT ? window.open(`transcript.${e.target.value}`) : (location.href = `/api/videos/${current.manifest.id}/transcript/${e.target.value}`)
   e.target.value = ''
 })
+// The dialog, filled with the open video as it was processed: one click, or another model.
+$('#reprocessBtn').onclick = () => {
+  if (!current) return
+  const m = current.manifest
+  openNew()
+  $('#path').value = m.source
+  $('#language').value = [...$('#language').options].some((o) => o.value === m.language) ? m.language : 'auto'
+  if (m.model) $('#wmodel').value = m.model
+  $('#engine').value = m.engine ?? ''
+  $('#force').checked = true
+  $('#newErr').textContent = ''
+  $('#reprocessNote').hidden = false
+  $('#reprocessNote').textContent = `Processing "${m.title}" again: its transcript, key frames and text on screen are made anew; its chapters and notes are kept.`
+}
 $('#exportBtn').onclick = () => {
   if (!current) return
   toast(`Preparing ${current.manifest.title}.zip… it downloads as it is written.`)
@@ -1005,7 +1021,7 @@ document.addEventListener('mouseup', (e) => setTimeout(() => {
 
 // ---------- new videos ----------
 let chosenFiles = []
-function openNew() { chosenFiles = []; $('#fileName').textContent = ''; $('#path').value = ''; $('#newErr').textContent = ''; $('#uploadBar').hidden = $('#uploadLabel').hidden = true; $('#newDialog').showModal() }
+function openNew() { chosenFiles = []; $('#fileName').textContent = ''; $('#path').value = ''; $('#newErr').textContent = ''; $('#force').checked = false; $('#reprocessNote').hidden = true; $('#uploadBar').hidden = $('#uploadLabel').hidden = true; $('#newDialog').showModal() }
 $('#newBtn').onclick = openNew
 $('#queueAdd').onclick = openNew
 $('#cancelNew').onclick = () => $('#newDialog').close()

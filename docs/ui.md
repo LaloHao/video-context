@@ -86,7 +86,11 @@ with nothing to process. A recorder's `.json` (the meeting's title and who spoke
 [Who said what](../README.md#who-said-what)) goes with its video: drop both, or give both
 paths. It is uploaded first and read when the video is processed; it is never queued itself.
 A video processed before its `.json` was next to it shows **Process again** in the queue, to
-add the speakers. A file already processed is ready at once (tick **Process again** to
+add the speakers.
+
+**Process again** (at the top) processes the open video anew: the dialog opens with its file,
+language, whisper model and engine — confirm, or pick a bigger model for a better transcript.
+Its chapters and notes are kept. A file already processed is ready at once (tick **Process again** to
 do it anyway).
 
 ## The queue
