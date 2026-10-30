@@ -5,7 +5,7 @@
 // so it uses the user's own login and can search the transcript and look at frames.
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, dirname, extname, join, normalize, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -19,7 +19,8 @@ import { screenAt } from './screen.js'
 import { Log } from './log.js'
 import { writeZip } from './zip.js'
 import { cleanChapters, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
-import { listVideos, loadVideo, processVideo, videoId } from './process.js'
+import { hasDuration, makePlayable, mediaFile } from './playable.js'
+import { listVideos, loadVideo, processVideo, videoDir, videoId } from './process.js'
 import { parseRecording, readRecording } from './recording.js'
 import { Queue, type JobOptions } from './queue.js'
 import { formatTime, parseTime } from './time.js'
@@ -99,6 +100,37 @@ function sendFile(req: IncomingMessage, res: ServerResponse, file: string): void
   }
   res.writeHead(200, { 'content-type': type, 'content-length': size, 'accept-ranges': 'bytes' })
   createReadStream(file).pipe(res)
+}
+
+/** Seekable copies being made for videos processed before there were any (see playable.ts). */
+const fixing = new Map<string, Promise<void>>()
+const checkedPlayable = new Set<string>()
+
+/**
+ * Whether a seekable copy of the video is being made: started, once, for a browser's
+ * recording (no duration in its header) processed before video-context made them.
+ */
+async function fixPlayable(id: string): Promise<boolean> {
+  if (fixing.has(id)) return true
+  if (checkedPlayable.has(id)) return false
+  checkedPlayable.add(id)
+  const video = loadVideo(id)
+  if (!video || video.manifest.playable || !existsSync(video.manifest.source)) return false
+  if (await hasDuration(video.manifest.source).catch(() => true)) return false
+  const { title, source } = video.manifest
+  log.info('playable', `"${title}" has no duration nor index (a browser's recording): making a seekable copy`)
+  const started = Date.now()
+  const job = makePlayable(source, video.dir)
+    .then((name) => {
+      // Read again: the copy took a while.
+      const file = join(video.dir, 'manifest.json')
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), playable: name }, null, 2))
+      log.info('playable', `"${title}" can be seeked now (copy made in ${((Date.now() - started) / 1000).toFixed(1)} s)`)
+    })
+    .catch((error: Error) => void log.error('playable', `Could not make a seekable copy of "${title}"`, error.message))
+    .finally(() => fixing.delete(id))
+  fixing.set(id, job)
+  return true
 }
 
 const VIDEO_TOOLS = ['search_transcript', 'get_transcript', 'get_frames', 'get_screen', 'list_frames', 'list_videos', 'search_videos']
@@ -340,7 +372,8 @@ async function clip(req: IncomingMessage, res: ServerResponse, id: string, url: 
   const format = url.searchParams.get('format') === 'gif' ? 'gif' : audioOnly ? 'm4a' : 'mp4'
   if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to <= from || from >= m.duration) return json(res, 400, { error: 'A start before the end is needed.' })
   if (format === 'gif' && (audioOnly || to - from > 30)) return json(res, 400, { error: audioOnly ? 'An audio file has no picture for a GIF.' : 'A GIF is at most 30 seconds.' })
-  if (!existsSync(m.source)) return json(res, 404, { error: 'The video file is no longer there.' })
+  const media = mediaFile(video.dir, m)
+  if (!existsSync(media)) return json(res, 404, { error: 'The video file is no longer there.' })
   const ffmpeg = findBinary('VIDEO_CONTEXT_FFMPEG', ['ffmpeg'])
   if (!ffmpeg) return json(res, 500, { error: 'ffmpeg is not installed.' })
   const dir = join(video.dir, 'clips')
@@ -350,7 +383,7 @@ async function clip(req: IncomingMessage, res: ServerResponse, id: string, url: 
   const file = join(dir, `${a}-${b}.${format}`)
   if (!existsSync(file)) {
     const tmp = `${file}.part.${format}`
-    const input = ['-hide_banner', '-v', 'error', '-y', '-ss', a, '-to', b, '-i', m.source]
+    const input = ['-hide_banner', '-v', 'error', '-y', '-ss', a, '-to', b, '-i', media]
     const encode =
       format === 'gif'
         ? ['-vf', 'fps=10,scale=min(720\\,iw):-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer', '-loop', '0']
@@ -412,7 +445,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return json(res, 200, { claudeModels: CLAUDE_MODELS, whisperModels: MODELS, engines: ENGINES, claude: Boolean(claudeBinary()), logFile: LOG_FILE.startsWith(homedir()) ? `~${LOG_FILE.slice(homedir().length)}` : LOG_FILE })
 
   if (req.method === 'GET' && parts[1] === 'videos' && parts.length === 2)
-    return json(res, 200, listVideos().map((m) => ({ id: m.id, title: m.title, duration: m.duration, createdAt: m.createdAt, source: m.source, available: existsSync(m.source) })))
+    return json(res, 200, listVideos().map((m) => ({ id: m.id, title: m.title, duration: m.duration, createdAt: m.createdAt, source: m.source, available: existsSync(mediaFile(videoDir(m.id), m)) })))
 
   if (parts[1] === 'videos' && parts[2]) {
     const video = loadVideo(parts[2])
@@ -421,7 +454,8 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return json(res, 200, {
         manifest: video.manifest,
         segments: video.segments,
-        available: existsSync(video.manifest.source),
+        available: existsSync(mediaFile(video.dir, video.manifest)),
+        fixing: await fixPlayable(video.manifest.id),
         chapters: readChapters(video.dir),
         notes: readNotes(video.dir)
       })
@@ -462,8 +496,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return
     }
     if (req.method === 'GET' && parts[3] === 'media') {
-      if (!existsSync(video.manifest.source)) return json(res, 404, { error: 'The video file is no longer there.' })
-      return sendFile(req, res, video.manifest.source)
+      const media = mediaFile(video.dir, video.manifest)
+      if (!existsSync(media)) return json(res, 404, { error: 'The video file is no longer there.' })
+      return sendFile(req, res, media)
     }
     if (req.method === 'GET' && parts[3] === 'frames' && parts[4]) {
       const file = normalize(join('frames', parts[4]))

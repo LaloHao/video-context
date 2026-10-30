@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 
 import { findBinary } from './deps.js'
 import { findTesseract, ocrImage, ocrLanguages, tesseractLanguages } from './ocr.js'
+import { mediaFile } from './playable.js'
 import { loadVideo } from './process.js'
 
 const run = promisify(execFile)
@@ -28,7 +29,9 @@ export async function screenAt(id: string, seconds: number, { ocr = true } = {})
   const video = loadVideo(id)
   if (!video) throw new Error(`Video ${id} is not processed.`)
   const m = video.manifest
-  if (!existsSync(m.source)) throw new Error('The video file is no longer where it was processed: only its key frames can be seen (get_frames).')
+  // The seekable copy when there is one: a browser's recording is slow to seek in.
+  const media = mediaFile(video.dir, m)
+  if (!existsSync(media)) throw new Error('The video file is no longer where it was processed: only its key frames can be seen (get_frames).')
   if (m.frames.length === 0) throw new Error('This is an audio file: there is no screen to see.')
   const ffmpeg = findBinary('VIDEO_CONTEXT_FFMPEG', ['ffmpeg'])
   if (!ffmpeg) throw new Error('ffmpeg is not installed.')
@@ -40,7 +43,7 @@ export async function screenAt(id: string, seconds: number, { ocr = true } = {})
     mkdirSync(join(video.dir, 'screens'), { recursive: true })
     // Its own temporary file: Claude may ask for the same time in calls made at once.
     const tmp = join(video.dir, 'screens', `${ms}.${process.pid}-${randomUUID()}.part.jpg`)
-    await run(ffmpeg, ['-v', 'error', '-y', '-ss', String(time), '-i', m.source, '-frames:v', '1', '-vf', "scale='min(1280,iw)':-2", '-q:v', '3', tmp])
+    await run(ffmpeg, ['-v', 'error', '-y', '-ss', String(time), '-i', media, '-frames:v', '1', '-vf', "scale='min(1280,iw)':-2", '-q:v', '3', tmp])
     renameSync(tmp, image)
   }
   const screen: Screen = { time, file }

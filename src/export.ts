@@ -8,6 +8,7 @@ import { basename, extname, join, posix } from 'node:path'
 
 import { homeDir } from './deps.js'
 import { readChapters, readNotes, type Chapter, type Note } from './library.js'
+import { mediaFile } from './playable.js'
 import { loadVideo, videoDir, videoId, type Manifest } from './process.js'
 import { formatTime } from './time.js'
 import { toMarkdown, toSrt, type Segment } from './transcript.js'
@@ -58,12 +59,14 @@ export function exportArchive(id: string, page: string): { name: string; entries
   if (!video) throw new Error('No such video.')
   const m = video.manifest
   const folder = safeName(m.title)
-  const hasVideo = existsSync(m.source)
-  const videoName = hasVideo ? `video${extname(m.source).toLowerCase() || '.mp4'}` : null
+  // The seekable copy when there is one, so the exported page can seek too.
+  const media = mediaFile(video.dir, m)
+  const videoName = existsSync(media) ? `video${extname(media).toLowerCase() || '.mp4'}` : null
   const chapters = readChapters(video.dir)
   const notes = readNotes(video.dir)
   const info: ExportInfo = { schema: EXPORT_SCHEMA, exportedAt: new Date().toISOString(), id, title: m.title, video: videoName, originalName: basename(m.source) }
-  const manifest: Manifest = { ...m, source: videoName ?? basename(m.source) }
+  const { playable: _, ...rest } = m
+  const manifest: Manifest = { ...rest, source: videoName ?? basename(m.source) }
   const data: ExportData = { ...info, manifest, segments: video.segments, chapters, notes }
   // Inside a <script>: nothing in the data may close it.
   const json = JSON.stringify(data).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
@@ -86,7 +89,7 @@ export function exportArchive(id: string, page: string): { name: string; entries
     { name: at('README.txt'), data: README(m.title, m.duration) },
     ...m.frames.filter((f) => existsSync(join(video.dir, f.file))).map((f) => ({ name: at(f.file), file: join(video.dir, f.file) }))
   ]
-  if (videoName) entries.push({ name: at(videoName), file: m.source })
+  if (videoName) entries.push({ name: at(videoName), file: media })
   return { name: `${folder}.zip`, entries }
 }
 

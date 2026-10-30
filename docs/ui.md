@@ -188,7 +188,7 @@ Everything stays in `~/.cache/video-context` (`VIDEO_CONTEXT_HOME` picks another
 
 | Path | What it is |
 | --- | --- |
-| `videos/<id>/` | A processed video's results: `manifest.json`, `transcript.*`, `frames/`, and from the page `chapters.json`, `notes.json`, `clips/` (`unfinished.json` while it is not done). |
+| `videos/<id>/` | A processed video's results: `manifest.json`, `transcript.*`, `frames/`, and from the page `chapters.json`, `notes.json`, `clips/`, `screens/` (`unfinished.json` while it is not done; `playable.webm`, a seekable copy, for a browser's recording without duration nor index). |
 | `queue.json` | The processing queue. |
 | `logs/ui.log` | The log (moved to `ui.log.1` past 5 MB). |
 | `uploads/` | Files dropped on the page, processed from there. |

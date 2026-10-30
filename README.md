@@ -203,6 +203,11 @@ drop the video and its `.json` together.
   faster than whisper.cpp; on Linux, build whisper.cpp with CUDA for an NVIDIA GPU.
 - **The first video with mlx-whisper seems stuck at 0 %** — it is downloading the model from
   Hugging Face (once).
+- **A browser's recording plays but can't be seeked** (a meeting or screen recorder made it
+  with MediaRecorder: no duration, no index) — video-context makes a seekable copy when it
+  processes one (`playable.webm` in its folder, no re-encoding), and the page, clips and
+  exports use it; the original file is not changed. A video processed before this gets its
+  copy the first time it is opened in the page.
 - **`sh: video-context-ui: not found`** (or `video-context`, `video-context-mcp`) — `npx -p
   @lalohao/video-context …` was run inside a clone of this repository: npx takes the folder's
   own package for the published one, and its commands are not installed there. Run it from

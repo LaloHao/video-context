@@ -13,6 +13,7 @@ import { dhash, keepDistinct } from './dedupe.js'
 import { parseShowinfoTimes, selectExpression, type Frame } from './frames.js'
 import { findTesseract, mapLimit, ocrImage, ocrLanguages, tesseractLanguages } from './ocr.js'
 import { assignSpeakers, readRecording, speakerNames } from './recording.js'
+import { makePlayable } from './playable.js'
 import { parseMlxJson, parseWhisperJson, toMarkdown, toSrt, type Segment } from './transcript.js'
 
 export interface ProcessOptions {
@@ -63,6 +64,8 @@ export interface Manifest {
   ocr?: { engine: 'tesseract'; languages: string[] } | { skipped: string } | null
   /** From the recording file next to the video (`<name>.json`), when there is one. */
   recording?: { url?: string; startedAt?: string; speakers: string[] }
+  /** A seekable copy in the video's folder, when the source has no duration nor index (a browser's recording). */
+  playable?: string
   /** Imported from an export of another machine instead of processed here. */
   importedFrom?: { id: string; exportedAt?: string; originalName?: string }
 }
@@ -131,18 +134,20 @@ function run(
   })
 }
 
-async function duration(tools: Tools, file: string, opts: ProcessOptions): Promise<number> {
+/** How long the file is, and whether its header said so (a browser's recording doesn't). */
+async function duration(tools: Tools, file: string, opts: ProcessOptions): Promise<{ seconds: number; inHeader: boolean }> {
   const { signal, onSpawn } = opts
   const { stdout } = await run(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], { signal, onSpawn })
   let seconds = Number(stdout.trim())
-  if (!Number.isFinite(seconds)) {
+  const inHeader = Number.isFinite(seconds)
+  if (!inHeader) {
     // WebM files from a browser's MediaRecorder have no duration in their header:
     // read the packets through without decoding and take the last time reached.
     const { stderr } = await run(tools.ffmpeg, ['-hide_banner', '-i', file, '-map', '0', '-c', 'copy', '-f', 'null', '-'], { signal, onSpawn })
     seconds = lastProgressTime(stderr) ?? Number.NaN
   }
   if (!Number.isFinite(seconds)) throw new Error('Could not read the video duration: is it a video file?')
-  return seconds
+  return { seconds, inHeader }
 }
 
 /** The last `time=hh:mm:ss.xx` of an ffmpeg progress log, in seconds. */
@@ -299,7 +304,7 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
   mkdirSync(dir, { recursive: true })
   rmSync(join(dir, 'manifest.json'), { force: true })
   const abs = resolve(file)
-  const seconds = await duration(tools, abs, opts)
+  const { seconds, inHeader } = await duration(tools, abs, opts)
   const language = opts.language ?? 'auto'
   const modelName = opts.model ?? 'small'
 
@@ -364,7 +369,12 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
     return { ...kept, ocr }
   }
 
-  const [whisperSegments, { frames, dropped, ocr }] = await Promise.all([transcript(), shots()])
+  // A browser's recording can be played but not seeked: a remuxed copy can be (see playable.ts).
+  const playable = async (): Promise<string | undefined> => {
+    if (inHeader) return undefined
+    return makePlayable(abs, dir, opts.signal)
+  }
+  const [whisperSegments, { frames, dropped, ocr }, playableFile] = await Promise.all([transcript(), shots(), playable()])
   rmSync(audio, { force: true })
 
   // A recorder's metadata next to the video names the meeting and who spoke when.
@@ -388,6 +398,7 @@ export async function processVideo(file: string, opts: ProcessOptions = {}): Pro
     frames,
     droppedFrames: dropped,
     ocr,
+    ...(playableFile && { playable: playableFile }),
     ...(recording && {
       recording: { url: recording.url, startedAt: recording.recordingStartedAt, speakers: speakerNames(segments) }
     })

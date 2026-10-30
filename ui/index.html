@@ -54,6 +54,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 #playerWrap { background: #000; display: flex; justify-content: center; }
 video { width: 100%; max-height: 42vh; display: block; background: #000; }
 #missing { color: #ddd; padding: 40px 16px; text-align: center; }
+#fixNote { background: var(--accent-soft); color: var(--text); font-size: 12.5px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 
 #timeline { position: relative; height: 22px; background: var(--chap-a); cursor: pointer; overflow: hidden; }
 .tl-chap { position: absolute; top: 0; bottom: 0; border-right: 1px solid var(--panel); }
@@ -247,6 +248,7 @@ progress { width: 100%; accent-color: var(--accent); }
   <div id="empty" hidden><h2>No processed videos yet</h2><p class="muted">Process a recording to watch it with its transcript and ask Claude about it.</p><button class="btn primary" onclick="openNew()">+ New video</button></div>
   <section id="left">
     <div id="playerWrap"><video id="player" controls preload="metadata"></video></div>
+    <div id="fixNote" hidden></div>
     <div id="timeline" title="Chapters, notes (blue) and search hits (yellow)"></div>
     <div id="under">
       <span id="chapNow" class="muted"></span>
@@ -464,6 +466,7 @@ async function openVideo(id, at) {
       : `<div id="missing">The file is no longer at <code>${esc(m.source)}</code>.<br>The transcript and frames are still here.</div>`
   }
   renderFrames(); renderTranscript(); renderChapters(); renderNotes(); renderTimeline(); runSearch()
+  watchFix()
   if (scope() === 'video') loadChat()
   $('#clipbar').style.visibility = current.available ? '' : 'hidden'
 }
@@ -511,6 +514,33 @@ $('#exportBtn').onclick = () => {
   if (!current) return
   toast(`Preparing ${current.manifest.title}.zip… it downloads as it is written.`)
   location.href = `/api/videos/${current.manifest.id}/export`
+}
+
+// A browser's recording plays but can't be seeked until the server has made a seekable copy
+// (once, in the background): say so, and switch to the copy when it is there.
+let fixTimer = null
+function watchFix() {
+  clearTimeout(fixTimer)
+  const note = $('#fixNote')
+  note.hidden = !current?.fixing
+  if (!current?.fixing) return
+  note.textContent = 'This recording has no index (a browser\'s recording): it plays, but seeking needs a copy that is being made now — once, about a minute or less per hour of video.'
+  const id = current.manifest.id
+  fixTimer = setTimeout(async () => {
+    const res = await api(`/api/videos/${id}`)
+    if (!res.ok || current?.manifest.id !== id) return
+    const fresh = await res.json()
+    current.fixing = fresh.fixing
+    if (fresh.fixing) return watchFix()
+    current.manifest = fresh.manifest
+    note.hidden = true
+    // The same moment, from the copy.
+    const at = player.currentTime, playing = !player.paused
+    player.src = `${mediaUrl(id)}?seekable=${Date.now()}`
+    player.currentTime = at
+    if (playing) player.play().catch(() => {})
+    toast('The video can be seeked now.')
+  }, 3000)
 }
 
 // The transcript as subtitles of the player (CC), made here: a <track> file is not allowed from a page opened as a file.
