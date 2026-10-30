@@ -477,6 +477,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return sendFile(req, res, join(video.dir, screen.file))
     }
     if (req.method === 'GET' && parts[3] === 'export') {
+      // A browser's recording goes out as its seekable copy: made now if it isn't yet, so
+      // that whoever opens the export can seek in it too.
+      if (await fixPlayable(video.manifest.id)) await fixing.get(video.manifest.id)
       // Streamed as it is written: a large video is never copied first.
       const { name, entries } = exportArchive(video.manifest.id, readFileSync(PAGE, 'utf8'))
       const started = Date.now()
