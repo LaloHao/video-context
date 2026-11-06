@@ -64,7 +64,7 @@ function summary(id: string): string {
   ].join('\n')
 }
 
-const server = new McpServer({ name: 'video-context', version: '0.3.0' })
+const server = new McpServer({ name: 'video-context', version: '0.4.0' })
 
 server.registerTool(
   'process_video',
