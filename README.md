@@ -84,6 +84,9 @@ video-context --doctor
   -m, --model <name>     tiny, base, small, medium, large-v3-turbo, large-v3 (default: small)
   -e, --engine <name>    whisper.cpp or mlx (default: mlx when installed, else whisper.cpp)
   -o, --out <dir>        Also copy the results to this folder
+  -n, --name <name>      A name to call it by (instead of the file name)
+  -f, --folder <folder>  File it in a folder, e.g. "Posgrado/Clases"
+  -t, --tag <tag>        Tag it (repeat for several tags)
       --no-ocr           Do not read the text on screen
       --keep-duplicates  Keep near-identical frames
       --force            Process again even if it was processed before
@@ -100,13 +103,17 @@ modification time.
 | --- | --- |
 | `process_video` | Starts processing a local file in the background and returns its id. |
 | `video_status` | Progress, or a summary and where the results are once ready. |
-| `list_videos` | Videos already processed. |
+| `list_videos` | Videos already processed, by folder, with their tags; filter by folder or tag. |
 | `get_transcript` | The transcript as `[m:ss] text` lines (`[m:ss] Name: text` with speakers), optionally a time range. |
 | `search_transcript` | Where something is said or shown on screen, with times (accents and case aside). |
 | `get_frames` | Key frames as images with their on-screen text: around a time or over a range. |
 | `get_screen` | The exact screen at any times, from the video file, with its text: what key frames miss, like code being typed. |
 | `list_frames` | The time of every key frame. |
-| `search_videos` | Where something is said or shown across every processed video. |
+| `search_videos` | Where something is said or shown across every processed video (or a folder's, or a tag's). |
+| `label_video` | Name a video, file it in a folder, tag it. |
+
+Every tool takes a video by its name — or words of its name, folder or tags — as well as by
+its id: *"in my Posgrado videos, where did they explain OSPF?"*.
 
 Claude Code: `claude mcp add video-context -- npx -y -p @lalohao/video-context video-context-mcp`.
 Other clients and example prompts: [docs/mcp.md](docs/mcp.md).

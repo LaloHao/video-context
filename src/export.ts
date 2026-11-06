@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join, posix } from 'node:path'
 
 import { homeDir } from './deps.js'
+import { readLabels, writeLabels, type Labels } from './labels.js'
 import { readChapters, readNotes, type Chapter, type Note } from './library.js'
 import { mediaFile } from './playable.js'
 import { loadVideo, videoDir, videoId, type Manifest } from './process.js'
@@ -65,9 +66,11 @@ export function exportArchive(id: string, page: string): { name: string; entries
   const chapters = readChapters(video.dir)
   const notes = readNotes(video.dir)
   const info: ExportInfo = { schema: EXPORT_SCHEMA, exportedAt: new Date().toISOString(), id, title: m.title, video: videoName, originalName: basename(m.source) }
-  const { playable: _, ...rest } = m
-  const manifest: Manifest = { ...rest, source: videoName ?? basename(m.source) }
-  const data: ExportData = { ...info, manifest, segments: video.segments, chapters, notes }
+  // The name, folder and tags go in labels.json, as they are kept here: the manifest has the processed title.
+  const { playable: _, folder: _f, tags: _t, processedTitle, ...rest } = m
+  const manifest: Manifest = { ...rest, title: processedTitle ?? m.title, source: videoName ?? basename(m.source) }
+  // The page shows it by its name.
+  const data: ExportData = { ...info, manifest: { ...manifest, title: m.title }, segments: video.segments, chapters, notes }
   // Inside a <script>: nothing in the data may close it.
   const json = JSON.stringify(data).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   // Marked as exported in the HTML itself, so that what needs the server is hidden even before (or without) the script.
@@ -86,6 +89,7 @@ export function exportArchive(id: string, page: string): { name: string; entries
     { name: at('transcript.srt'), data: toSrt(video.segments) },
     { name: at('chapters.json'), data: JSON.stringify(chapters, null, 2) },
     { name: at('notes.json'), data: JSON.stringify(notes, null, 2) },
+    { name: at('labels.json'), data: JSON.stringify(readLabels(video.dir), null, 2) },
     { name: at('README.txt'), data: README(m.title, m.duration) },
     ...m.frames.filter((f) => existsSync(join(video.dir, f.file))).map((f) => ({ name: at(f.file), file: join(video.dir, f.file) }))
   ]
@@ -148,6 +152,7 @@ export async function importArchive(file: string): Promise<{ id: string; title: 
   writeFileSync(join(dir, 'transcript.srt'), entry('transcript.srt') ? readZipEntry(file, entry('transcript.srt')!) : toSrt(segments))
   writeFileSync(join(dir, 'chapters.json'), JSON.stringify(chapters, null, 2))
   writeFileSync(join(dir, 'notes.json'), JSON.stringify(notes, null, 2))
+  if (entry('labels.json')) writeLabels(dir, json<Labels>('labels.json'))
   const imported: Manifest = { ...manifest, id, source, frames, importedFrom: { id: info.id, exportedAt: info.exportedAt, originalName: info.originalName } }
   // Last, as processing does: a folder with a manifest is a finished one.
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify(imported, null, 2))

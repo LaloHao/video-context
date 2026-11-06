@@ -18,7 +18,8 @@ import { exportArchive, importArchive } from './export.js'
 import { screenAt } from './screen.js'
 import { Log } from './log.js'
 import { writeZip } from './zip.js'
-import { cleanChapters, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
+import { cleanFolder, cleanTags, writeLabels } from './labels.js'
+import { cleanChapters, findVideos, readChapters, readNotes, searchLibrary, writeChapters, writeNotes, type Note } from './library.js'
 import { hasDuration, makePlayable, mediaFile } from './playable.js'
 import { listVideos, loadVideo, processVideo, videoDir, videoId } from './process.js'
 import { parseRecording, readRecording } from './recording.js'
@@ -169,17 +170,20 @@ function videoPrompt(id: string): string {
 }
 
 /** What Claude is told to answer about every processed video: a short label per video ("V2") that citations use. */
-function libraryPrompt(): { prompt: string; labels: Record<string, string> } {
+function libraryPrompt(folder?: string): { prompt: string; labels: Record<string, string> } {
   const labels: Record<string, string> = {}
-  const lines = listVideos().map((m, i) => {
+  const lines = findVideos({ folder }).map((m, i) => {
     const label = `V${i + 1}`
     labels[label] = m.id
     const chapters = chapterLines(join(homeDir(), 'videos', m.id))
     const speakers = m.recording?.speakers.length ? `; speakers: ${m.recording.speakers.join(', ')}` : ''
-    return `${label}: "${m.title}" — video id ${m.id}, ${formatTime(m.duration)}, processed ${m.createdAt.slice(0, 10)}${speakers}${chapters ? `; chapters: ${chapters}` : ''}`
+    const filed = [m.folder && `folder ${m.folder}`, m.tags?.length && `tags ${m.tags.map((t) => `#${t}`).join(' ')}`].filter(Boolean).join('; ')
+    return `${label}: "${m.title}" — video id ${m.id}, ${formatTime(m.duration)}, processed ${m.createdAt.slice(0, 10)}${filed ? `; ${filed}` : ''}${speakers}${chapters ? `; chapters: ${chapters}` : ''}`
   })
   const prompt = [
-    'The user asks about their library of processed videos (recordings of meetings, trainings, screencasts):',
+    folder
+      ? `The user asks about the videos in their folder "${folder}" (recordings of meetings, trainings, screencasts); search only these (search_videos with folder "${folder}"):`
+      : 'The user asks about their library of processed videos (recordings of meetings, trainings, screencasts):',
     lines.join('\n'),
     'Answer in the language the user writes in. Be concise.',
     'Find which videos talk about something with the search_videos tool, then dig into one with search_transcript, get_transcript, get_frames (its key frames) or get_screen (the exact screen at any time) and its video id.',
@@ -191,6 +195,7 @@ function libraryPrompt(): { prompt: string; labels: Record<string, string> } {
 /** Ask Claude about a video, or about every video: the claude CLI streams back as NDJSON events for the page. */
 function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>): void {
   const library = body.scope === 'library'
+  const folder = library ? cleanFolder(body.folder) : undefined
   const id = String(body.videoId ?? '')
   const question = String(body.question ?? '').trim()
   const video = library ? null : loadVideo(id)
@@ -198,7 +203,7 @@ function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, un
   const claude = claudeBinary()
   if (!claude) return json(res, 500, { error: 'The claude CLI is not installed: https://claude.com/claude-code' })
   const session = typeof body.sessionId === 'string' && /^[0-9a-f-]{36}$/.test(body.sessionId) ? body.sessionId : null
-  const { prompt, labels } = library ? libraryPrompt() : { prompt: videoPrompt(id), labels: undefined }
+  const { prompt, labels } = library ? libraryPrompt(folder) : { prompt: videoPrompt(id), labels: undefined }
   // The same cache as the page, whatever the environment of the claude CLI.
   const mcp = { mcpServers: { 'video-context': { command: process.execPath, args: [MCP_SERVER], env: { VIDEO_CONTEXT_HOME: homeDir() } } } }
   const args = [
@@ -215,7 +220,7 @@ function chat(req: IncomingMessage, res: ServerResponse, body: Record<string, un
   // Run in the video's folder (or the cache) so no project's CLAUDE.md or settings leak in.
   const cwd = video?.dir ?? homeDir()
   mkdirSync(cwd, { recursive: true })
-  const about = library ? 'all videos' : `"${video!.manifest.title}"`
+  const about = library ? (folder ? `the folder "${folder}"` : 'all videos') : `"${video!.manifest.title}"`
   log.info('chat', `Question about ${about} with ${claudeModel(body.model)}${session ? ' (follow-up)' : ''}`, question)
   const child = spawn(claude, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
   chats.add(child)
@@ -445,7 +450,11 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return json(res, 200, { claudeModels: CLAUDE_MODELS, whisperModels: MODELS, engines: ENGINES, claude: Boolean(claudeBinary()), logFile: LOG_FILE.startsWith(homedir()) ? `~${LOG_FILE.slice(homedir().length)}` : LOG_FILE })
 
   if (req.method === 'GET' && parts[1] === 'videos' && parts.length === 2)
-    return json(res, 200, listVideos().map((m) => ({ id: m.id, title: m.title, duration: m.duration, createdAt: m.createdAt, source: m.source, available: existsSync(mediaFile(videoDir(m.id), m)) })))
+    return json(
+      res,
+      200,
+      listVideos().map((m) => ({ id: m.id, title: m.title, folder: m.folder, tags: m.tags ?? [], duration: m.duration, createdAt: m.createdAt, source: m.source, available: existsSync(mediaFile(videoDir(m.id), m)) }))
+    )
 
   if (parts[1] === 'videos' && parts[2]) {
     const video = loadVideo(parts[2])
@@ -460,6 +469,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         notes: readNotes(video.dir)
       })
     if (req.method === 'POST' && parts[3] === 'chapters') return json(res, 200, await makeChapters(video.manifest.id, claudeModel((await readJson(req)).model)))
+    if (req.method === 'PUT' && parts[3] === 'labels') {
+      const body = await readJson(req)
+      const labels = writeLabels(video.dir, { title: body.title as string, folder: body.folder as string, tags: cleanTags(body.tags) })
+      const m = loadVideo(video.manifest.id)!.manifest
+      log.info('labels', `"${m.title}": ${[labels.folder ? `folder ${labels.folder}` : 'no folder', labels.tags.length ? labels.tags.map((t) => `#${t}`).join(' ') : 'no tags'].join(', ')}`)
+      return json(res, 200, { manifest: m })
+    }
     if (req.method === 'PUT' && parts[3] === 'notes') {
       const list = (await readJson(req)).notes
       if (!Array.isArray(list)) return json(res, 400, { error: 'A list of notes is needed.' })

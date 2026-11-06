@@ -6,7 +6,8 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 
 import { doctor, ENGINES, MODELS, type Engine, type ModelName } from './deps.js'
-import { processVideo } from './process.js'
+import { readLabels, writeLabels } from './labels.js'
+import { loadVideo, processVideo } from './process.js'
 import { formatTime } from './time.js'
 
 const USAGE = `Usage: video-context <video> [options]
@@ -19,6 +20,9 @@ Options:
   -m, --model <name>     Whisper model: ${MODELS.join(', ')} (default: small)
   -e, --engine <name>    ${ENGINES.join(' or ')} (default: mlx when installed, else whisper.cpp)
   -o, --out <dir>        Also copy the results to this folder
+  -n, --name <name>      A name to call it by (instead of the file name)
+  -f, --folder <folder>  File it in a folder, e.g. "Posgrado/Clases"
+  -t, --tag <tag>        Tag it (repeat for several tags)
       --no-ocr           Do not read the text on screen (OCR needs tesseract)
       --keep-duplicates  Keep near-identical frames
       --force            Process again even if it was processed before
@@ -36,6 +40,9 @@ const { values, positionals } = parseArgs({
     engine: { type: 'string', short: 'e' },
     doctor: { type: 'boolean' },
     out: { type: 'string', short: 'o' },
+    name: { type: 'string', short: 'n' },
+    folder: { type: 'string', short: 'f' },
+    tag: { type: 'string', short: 't', multiple: true },
     force: { type: 'boolean' },
     'no-ocr': { type: 'boolean' },
     'keep-duplicates': { type: 'boolean' },
@@ -65,7 +72,7 @@ if (values.engine && !(ENGINES as readonly string[]).includes(values.engine)) {
 const file = positionals[0]
 let last = ''
 try {
-  const { dir, manifest } = await processVideo(file, {
+  const processed = await processVideo(file, {
     language: values.language,
     model: values.model as ModelName | undefined,
     engine: values.engine as Engine | undefined,
@@ -78,6 +85,13 @@ try {
       process.stderr.write(`${p.message}\n`)
     }
   })
+  const { dir } = processed
+  // Name, folder and tags: kept apart from the results (labels.json), the tags added to any it has.
+  if (values.name || values.folder || values.tag?.length) {
+    const before = readLabels(dir)
+    writeLabels(dir, { title: values.name ?? before.title, folder: values.folder ?? before.folder, tags: [...before.tags, ...(values.tag ?? [])] })
+  }
+  const manifest = loadVideo(processed.manifest.id)?.manifest ?? processed.manifest
   let target = dir
   if (values.out) {
     target = resolve(values.out)
@@ -87,6 +101,7 @@ try {
   console.log(`Transcript: ${join(target, 'transcript.md')}`)
   console.log(`Frames:     ${join(target, 'frames')}`)
   console.log(`Video id:   ${manifest.id}`)
+  if (manifest.folder || manifest.tags?.length) console.log(`Filed:      ${[manifest.folder, ...(manifest.tags ?? []).map((t) => `#${t}`)].filter(Boolean).join(' · ')}`)
   if (manifest.droppedFrames) console.log(`Dropped ${manifest.droppedFrames} near-duplicate frames.`)
   if (manifest.ocr && 'skipped' in manifest.ocr) console.log(`Text on screen not read: ${manifest.ocr.skipped}.`)
 } catch (error) {

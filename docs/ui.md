@@ -64,6 +64,15 @@ transcript and in the **Chapters** tab; the current one is named under the playe
   30 s) download it, made with ffmpeg once and kept in the video's `clips/` folder. An audio
   file gives an M4A.
 
+## Names, folders and tags
+
+**Labels** (at the top) gives the open video a name (instead of `2026-10-29_18-19-05_…`), a
+folder (`Posgrado/Clases`; subfolders with `/`) and tags (the ones in use are offered). The
+video list is grouped by folder, with the tags; the chat can be asked **about a folder**
+(its videos only); and Claude, here or through MCP, calls videos by their name, folder or
+tags (*"the posgrado class on OSPF"*). They are kept in `labels.json` next to the video's
+results: processing it again keeps them, and they travel in an export.
+
 ## All your videos
 
 ![Search results from every video and an answer that cites two of them](images/ui-library.png)
@@ -192,7 +201,7 @@ Everything stays in `~/.cache/video-context` (`VIDEO_CONTEXT_HOME` picks another
 
 | Path | What it is |
 | --- | --- |
-| `videos/<id>/` | A processed video's results: `manifest.json`, `transcript.*`, `frames/`, and from the page `chapters.json`, `notes.json`, `clips/`, `screens/` (`unfinished.json` while it is not done; `playable.webm`, a seekable copy, for a browser's recording without duration nor index). |
+| `videos/<id>/` | A processed video's results: `manifest.json`, `transcript.*`, `frames/`, and from the page `labels.json`, `chapters.json`, `notes.json`, `clips/`, `screens/` (`unfinished.json` while it is not done; `playable.webm`, a seekable copy, for a browser's recording without duration nor index). |
 | `queue.json` | The processing queue. |
 | `logs/ui.log` | The log (moved to `ui.log.1` past 5 MB). |
 | `uploads/` | Files dropped on the page, processed from there. |

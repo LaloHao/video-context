@@ -3,7 +3,7 @@
 // call should block, so `process_video` starts a background job and returns;
 // `video_status` follows it. Everything else reads the cached result.
 
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -12,9 +12,10 @@ import { z } from 'zod'
 
 import { ENGINES, MODELS, type ModelName } from './deps.js'
 import { framesAround, framesBetween, searchScreen } from './frames.js'
-import { searchLibrary } from './library.js'
+import { cleanFolder, cleanTags, readLabels, writeLabels } from './labels.js'
+import { describeVideo, findVideos, resolveVideo, searchLibrary } from './library.js'
 import { screenAt } from './screen.js'
-import { listVideos, loadVideo, processVideo, videoId, type Progress } from './process.js'
+import { listVideos, loadVideo, processVideo, videoDir, videoId, type Manifest, type Progress } from './process.js'
 import { formatTime, parseTime } from './time.js'
 import { fold, rangeText, searchSegments } from './transcript.js'
 
@@ -31,6 +32,19 @@ type Content = { type: 'text'; text: string } | { type: 'image'; data: string; m
 const text = (value: string): { content: Content[] } => ({ content: [{ type: 'text', text: value }] })
 const fail = (value: string): { content: Content[]; isError: true } => ({ content: [{ type: 'text', text: value }], isError: true })
 
+/** How a tool names a video: by id, or as the user calls it. */
+const VIDEO = z
+  .string()
+  .describe('The video: its name, or words of its name, folder or tags ("weekly sync", "posgrado clase 3"), or its id. list_videos lists them.')
+
+/** The video `ref` names, processed; or what to tell the agent (no such video, or which ones it could be). */
+function resolveLoaded(ref: string): ({ id: string } & NonNullable<ReturnType<typeof loadVideo>>) | { error: string } {
+  const found = resolveVideo(ref)
+  if ('error' in found) return found
+  const loaded = loadVideo(found.id)
+  return loaded ? { id: found.id, ...loaded } : { error: `Video ${found.id} is not processed (yet).` }
+}
+
 function summary(id: string): string {
   const video = loadVideo(id)
   if (!video) return ''
@@ -39,13 +53,14 @@ function summary(id: string): string {
     m.ocr && 'engine' in m.ocr
       ? ` Text on screen was read (OCR) on ${m.frames.filter((f) => f.text).length} of them, and search_transcript searches it too.`
       : ''
+  const filed = m.folder || m.tags?.length ? ` Filed under ${[m.folder, ...(m.tags ?? []).map((t) => `#${t}`)].filter(Boolean).join(' · ')}.` : ''
   const speakers = m.recording?.speakers.length
     ? ` The transcript says who spoke (${m.recording.speakers.join(', ')}); search_transcript also finds a speaker's name.`
     : ''
   return [
-    `Video ${m.id} is ready: "${m.title}", ${formatTime(m.duration)} long, ${m.segments} transcript segments, ${m.frames.length} key frames.${screen}${speakers}`,
+    `Video ${m.id} is ready: "${m.title}", ${formatTime(m.duration)} long, ${m.segments} transcript segments, ${m.frames.length} key frames.${filed}${screen}${speakers}`,
     `Transcript (Markdown, with times): ${join(video.dir, 'transcript.md')}`,
-    'Read it with get_transcript (by time range), find topics with search_transcript, and look at the screen with get_frames.'
+    'Read it with get_transcript (by time range), find topics with search_transcript, and look at the screen with get_frames. The tools take its name as well as its id.'
   ].join('\n')
 }
 
@@ -61,15 +76,24 @@ server.registerTool(
       language: z.string().optional().describe('Spoken language code, e.g. "es" or "en". Default: auto-detect.'),
       model: z.enum(MODELS).optional().describe('Whisper model. Default "small"; "medium" or "large-v3-turbo" are more accurate and slower.'),
       engine: z.enum(ENGINES).optional().describe('Transcription engine. Default: mlx (Apple silicon) when installed, else whisper.cpp.'),
-      force: z.boolean().optional().describe('Process again even if it was processed before.')
+      force: z.boolean().optional().describe('Process again even if it was processed before.'),
+      title: z.string().optional().describe('A name to call it by, instead of the file name.'),
+      folder: z.string().optional().describe('A folder to file it in, e.g. "Posgrado/Clases".'),
+      tags: z.array(z.string()).optional().describe('Tags, e.g. ["redes", "examen"].')
     }
   },
-  async ({ path, language, model, engine, force }) => {
+  async ({ path, language, model, engine, force, title, folder, tags }) => {
     let id: string
     try {
       id = videoId(path)
     } catch {
       return fail(`${path} does not exist or cannot be read.`)
+    }
+    // Filed at once, so it can be called by its name while it is processed.
+    if (title || folder || tags?.length) {
+      mkdirSync(videoDir(id), { recursive: true })
+      const before = readLabels(videoDir(id))
+      writeLabels(videoDir(id), { title: title ?? before.title, folder: folder ?? before.folder, tags: tags ?? before.tags })
     }
     if (!force && loadVideo(id)) return text(summary(id))
     const running = jobs.get(id)
@@ -87,9 +111,12 @@ server.registerTool(
   'video_status',
   {
     description: 'How the processing of a video is going, or what is ready once it finished.',
-    inputSchema: { videoId: z.string() }
+    inputSchema: { videoId: VIDEO }
   },
-  async ({ videoId: id }) => {
+  async ({ videoId: ref }) => {
+    const found = /^[0-9a-f]{16}$/.test(ref) ? { id: ref } : resolveVideo(ref)
+    if ('error' in found) return fail(found.error)
+    const id = found.id
     const job = jobs.get(id)
     if (job?.error) return fail(`Processing failed: ${job.error}`)
     if (loadVideo(id)) return text(summary(id))
@@ -100,11 +127,66 @@ server.registerTool(
 
 server.registerTool(
   'list_videos',
-  { description: 'The videos already processed: id, title, duration and source path.', inputSchema: {} },
-  async () => {
-    const videos = listVideos()
-    if (videos.length === 0) return text('No video has been processed yet.')
-    return text(videos.map((m) => `- ${m.id}: "${m.title}" (${formatTime(m.duration)}) — ${m.source}`).join('\n'))
+  {
+    description:
+      'The videos already processed, by folder: name, tags, length, date and id. Filter by a folder (with its subfolders) or a tag. The other tools take a video by its name as well as its id.',
+    inputSchema: {
+      folder: z.string().optional().describe('Only this folder and its subfolders, e.g. "Posgrado".'),
+      tag: z.string().optional().describe('Only the videos with this tag.')
+    }
+  },
+  async ({ folder, tag }) => {
+    const all = listVideos()
+    if (all.length === 0) return text('No video has been processed yet.')
+    const videos = findVideos({ folder, tag })
+    if (videos.length === 0) return text(`No video${folder ? ` in "${folder}"` : ''}${tag ? ` tagged #${tag.replace(/^#/, '')}` : ''}. ${summaryOfLabels(all)}`)
+    const byFolder = new Map<string, Manifest[]>()
+    for (const m of videos) byFolder.set(m.folder ?? '', [...(byFolder.get(m.folder ?? '') ?? []), m])
+    const sections = [...byFolder.entries()]
+      .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+      .map(([name, list]) =>
+        [`## ${name || 'No folder'}`, ...list.map((m) => `- "${m.title}"${m.tags?.length ? ` ${m.tags.map((t) => `#${t}`).join(' ')}` : ''} — ${formatTime(m.duration)}, ${m.createdAt.slice(0, 10)}, id ${m.id}`)].join('\n')
+      )
+    const shown = videos.length < all.length ? `Showing ${videos.length} of them.` : ''
+    return text([[summaryOfLabels(all), shown].filter(Boolean).join(' '), ...sections].join('\n\n'))
+  }
+)
+
+/** The folders and tags in use, with how many videos each. */
+function summaryOfLabels(videos: Manifest[]): string {
+  const count = (keys: string[]): string =>
+    [...keys.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map<string, number>())].map(([k, n]) => `${k} (${n})`).join(', ')
+  const folders = count(videos.flatMap((m) => (m.folder ? [m.folder] : [])))
+  const tags = count(videos.flatMap((m) => (m.tags ?? []).map((t) => `#${t}`)))
+  return `${videos.length} videos. Folders: ${folders || 'none'}. Tags: ${tags || 'none'}.`
+}
+
+server.registerTool(
+  'label_video',
+  {
+    description:
+      'Name a video, file it in a folder, or tag it, to find and call it easily (in list_videos, search_videos, and by name in every tool). Only what is given changes; an empty title or folder removes it.',
+    inputSchema: {
+      videoId: VIDEO,
+      title: z.string().optional().describe('Its name ("" goes back to the processed title).'),
+      folder: z.string().optional().describe('Its folder, e.g. "Posgrado/Clases" ("" takes it out of any folder).'),
+      tags: z.array(z.string()).optional().describe('Its tags, replacing the ones it has.'),
+      addTags: z.array(z.string()).optional().describe('Tags to add.'),
+      removeTags: z.array(z.string()).optional().describe('Tags to remove.')
+    }
+  },
+  async ({ videoId: ref, title, folder, tags, addTags, removeTags }) => {
+    const v = resolveLoaded(ref)
+    if ('error' in v) return fail(v.error)
+    const before = readLabels(v.dir)
+    const removed = new Set(cleanTags(removeTags).map((t) => t.toLowerCase()))
+    writeLabels(v.dir, {
+      title: title ?? before.title,
+      folder: folder !== undefined ? cleanFolder(folder) : before.folder,
+      tags: [...(tags ? cleanTags(tags) : before.tags), ...cleanTags(addTags)].filter((t) => !removed.has(t.toLowerCase()))
+    })
+    const now = loadVideo(v.id)!.manifest
+    return text(`Now: ${describeVideo(now)}`)
   }
 )
 
@@ -113,14 +195,14 @@ server.registerTool(
   {
     description: `The transcript of a processed video, one "[m:ss] text" line per segment, optionally only a time range. Long answers stop at about ${MAX_TRANSCRIPT_CHARS} characters and say where to continue.`,
     inputSchema: {
-      videoId: z.string(),
+      videoId: VIDEO,
       from: z.string().optional().describe('Start time, e.g. "12:30" or "750". Default: the beginning.'),
       to: z.string().optional().describe('End time. Default: the end.')
     }
   },
-  async ({ videoId: id, from, to }) => {
-    const video = loadVideo(id)
-    if (!video) return fail(`Video ${id} is not processed (yet). Use process_video / video_status.`)
+  async ({ videoId: ref, from, to }) => {
+    const video = resolveLoaded(ref)
+    if ('error' in video) return fail(video.error)
     const start = parseTime(from) ?? 0
     const end = parseTime(to) ?? Number.POSITIVE_INFINITY
     const lines = rangeText(video.segments, start, end).split('\n')
@@ -142,14 +224,14 @@ server.registerTool(
     description:
       'Find something in a processed video: where it is said (transcript segments with all the words, accents and case aside, with the text around them) and where it is shown on screen (text read from the key frames: URLs, code, field names). Each hit has its time; look at a screen hit with get_frames at that time.',
     inputSchema: {
-      videoId: z.string(),
+      videoId: VIDEO,
       query: z.string(),
       limit: z.number().int().min(1).max(30).optional()
     }
   },
-  async ({ videoId: id, query, limit }) => {
-    const video = loadVideo(id)
-    if (!video) return fail(`Video ${id} is not processed (yet).`)
+  async ({ videoId: ref, query, limit }) => {
+    const video = resolveLoaded(ref)
+    if ('error' in video) return fail(video.error)
     const said = searchSegments(video.segments, query, limit ?? 10)
     const shown = searchScreen(video.manifest.frames, query, fold, limit ?? 10)
     if (said.length === 0 && shown.length === 0) return text(`"${query}" is not found in the transcript or on screen. Try other words or a synonym.`)
@@ -165,16 +247,16 @@ server.registerTool(
   {
     description: `Key frames of a processed video as images, to see what the screen shows (code, forms, diagrams). Either the frames around one time ("at"), or spread over a range ("from"/"to"). At most ${MAX_FRAMES}.`,
     inputSchema: {
-      videoId: z.string(),
+      videoId: VIDEO,
       at: z.string().optional().describe('A time, e.g. "23:10": the frames closest to it.'),
       from: z.string().optional(),
       to: z.string().optional(),
       limit: z.number().int().min(1).max(MAX_FRAMES).optional()
     }
   },
-  async ({ videoId: id, at, from, to, limit }) => {
-    const video = loadVideo(id)
-    if (!video) return fail(`Video ${id} is not processed (yet).`)
+  async ({ videoId: ref, at, from, to, limit }) => {
+    const video = resolveLoaded(ref)
+    if ('error' in video) return fail(video.error)
     const count = limit ?? 4
     const atTime = parseTime(at)
     const frames =
@@ -197,13 +279,14 @@ server.registerTool(
   {
     description: `The screen at exact times, taken from the video file: any moment, not only the key frames. Use it to read what changes little by little between key frames — code or text being typed, a form being filled, a dialog — or when the key frames around a time do not show what was said. At most ${MAX_FRAMES} times per call.`,
     inputSchema: {
-      videoId: z.string(),
+      videoId: VIDEO,
       at: z.union([z.string(), z.array(z.string()).min(1).max(MAX_FRAMES)]).describe('A time like "3:15", or several: ["3:05", "3:15", "3:25"].')
     }
   },
-  async ({ videoId: id, at }) => {
-    const video = loadVideo(id)
-    if (!video) return fail(`Video ${id} is not processed (yet).`)
+  async ({ videoId: ref, at }) => {
+    const video = resolveLoaded(ref)
+    if ('error' in video) return fail(video.error)
+    const id = video.id
     const times = (Array.isArray(at) ? at : [at]).map((t) => parseTime(t))
     if (times.some((t) => t === null)) return fail('Times look like "3:15", "1:02:03" or a number of seconds.')
     const content: Content[] = []
@@ -223,10 +306,10 @@ server.registerTool(
 
 server.registerTool(
   'list_frames',
-  { description: 'The times of every key frame of a processed video (to choose which to look at).', inputSchema: { videoId: z.string() } },
-  async ({ videoId: id }) => {
-    const video = loadVideo(id)
-    if (!video) return fail(`Video ${id} is not processed (yet).`)
+  { description: 'The times of every key frame of a processed video (to choose which to look at).', inputSchema: { videoId: VIDEO } },
+  async ({ videoId: ref }) => {
+    const video = resolveLoaded(ref)
+    if ('error' in video) return fail(video.error)
     return text(video.manifest.frames.map((f) => formatTime(f.time)).join(', '))
   }
 )
@@ -238,12 +321,15 @@ server.registerTool(
       'Find something across every processed video at once: which videos say it or show it on screen, and when. Use it to answer "in which meeting did they talk about…". Every word of the query must appear (accents and case aside), so search one or two key words in the form spoken ("table", not "HTML tables"), and one topic per call. Then read a video with get_transcript or search_transcript.',
     inputSchema: {
       query: z.string(),
-      limit: z.number().int().min(1).max(20).optional().describe('Hits per video (default 5).')
+      limit: z.number().int().min(1).max(20).optional().describe('Hits per video (default 5).'),
+      folder: z.string().optional().describe('Only the videos in this folder (and its subfolders).'),
+      tag: z.string().optional().describe('Only the videos with this tag.')
     }
   },
-  async ({ query, limit }) => {
-    const found = searchLibrary(query, limit ?? 5)
-    if (found.length === 0) return text(`"${query}" is not found in any processed video. Try other words or a synonym.`)
+  async ({ query, limit, folder, tag }) => {
+    const found = searchLibrary(query, limit ?? 5, { folder, tag })
+    const scope = `${folder ? ` in "${folder}"` : ''}${tag ? ` tagged #${tag.replace(/^#/, '')}` : ''}`
+    if (found.length === 0) return text(`"${query}" is not found in any processed video${scope}. Try other words or a synonym.`)
     return text(
       found
         .map((v) => {

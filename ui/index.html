@@ -212,7 +212,7 @@ progress { width: 100%; accent-color: var(--accent); }
 #logs .filters input { flex: 1; min-width: 120px; }
 #scrim { position: fixed; inset: 0; z-index: 19; background: rgba(0,0,0,.25); }
 /* A page exported with its video: no server behind it. */
-.static #newBtn, .static #exportBtn, .static #reprocessBtn, .static #queueBtn, .static #logsBtn, .static header label, .static #tabs [data-tab=chat], .static #genChapters,
+.static #newBtn, .static #exportBtn, .static #reprocessBtn, .static #labelsBtn, .static #queueBtn, .static #logsBtn, .static header label, .static #tabs [data-tab=chat], .static #genChapters,
 .static #clipMp4, .static #clipGif, .static #searchAllLabel, .static #selAsk, .static #videoSelect { display: none !important; }
 /* One video in an exported page: its title instead of the list. */
 #videoTitle { display: none; font-weight: 600; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -234,6 +234,7 @@ progress { width: 100%; accent-color: var(--accent); }
   <h1>video<span>·</span>context</h1>
   <select id="videoSelect" aria-label="Video"></select>
   <span id="videoTitle"></span>
+  <button class="btn" id="labelsBtn" title="Name, folder and tags: to find it, and to call it by name from Claude">Labels</button>
   <button class="btn" id="reprocessBtn" title="Process this video again: its transcript, key frames and text on screen. Its chapters and notes are kept.">Process again</button>
   <button class="btn" id="exportBtn" title="Download this video as a ZIP: the video, its transcript, frames, chapters and notes, and a page that opens without a server. video-context imports it back without processing.">Export</button>
   <button class="btn primary" id="newBtn">+ New video</button>
@@ -358,6 +359,21 @@ progress { width: 100%; accent-color: var(--accent); }
 </aside>
 <div id="toast" hidden></div>
 
+<dialog id="labelsDialog">
+  <h2>Labels</h2>
+  <div class="row"><label>Name<input type="text" id="labelTitle" placeholder=""></label></div>
+  <div class="row"><label>Folder<input type="text" id="labelFolder" list="folderList" placeholder="e.g. Posgrado/Clases"></label></div>
+  <div class="row"><label>Tags<input type="text" id="labelTags" placeholder="comma separated: redes, examen"></label></div>
+  <div class="row" id="tagChoices" style="gap:4px"></div>
+  <datalist id="folderList"></datalist>
+  <div class="muted" style="font-size:12.5px">Claude calls videos by their name, folder or tags: "the posgrado class on networks", "list my videos in Posgrado".</div>
+  <div id="labelsErr" class="err"></div>
+  <div class="row" style="justify-content:flex-end;margin:12px 0 0">
+    <button class="btn" id="cancelLabels" type="button">Cancel</button>
+    <button class="btn primary" id="saveLabels" type="button">Save</button>
+  </div>
+</dialog>
+
 <dialog id="newDialog">
   <h2>Add videos to the queue</h2>
   <div id="drop">Drop video or audio files here, or <label style="color:var(--accent);cursor:pointer;text-decoration:underline">choose them<input type="file" id="file" accept="video/*,audio/*,.mkv,.zip,application/zip" multiple hidden></label>
@@ -433,7 +449,13 @@ let clipA = null, clipB = null
 async function loadList(selectId) {
   videos = await (await api('/api/videos')).json()
   const sel = $('#videoSelect')
-  sel.innerHTML = videos.length ? videos.map((v) => `<option value="${v.id}">${esc(v.title)} · ${fmt(v.duration)}${v.available ? '' : ' (file missing)'}</option>`).join('') : '<option value="">No videos yet</option>'
+  // Grouped by folder (A–Z, the ones in none last), each video with its tags.
+  const option = (v) => `<option value="${v.id}">${esc(v.title)} · ${fmt(v.duration)}${v.tags?.length ? ` · ${v.tags.map((t) => `#${esc(t)}`).join(' ')}` : ''}${v.available ? '' : ' (file missing)'}</option>`
+  const folders = [...new Set(videos.map((v) => v.folder ?? ''))].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+  sel.innerHTML = !videos.length ? '<option value="">No videos yet</option>'
+    : folders.length === 1 && folders[0] === '' ? videos.map(option).join('')
+    : folders.map((f) => `<optgroup label="${esc(f || 'No folder')}">${videos.filter((v) => (v.folder ?? '') === f).map(option).join('')}</optgroup>`).join('')
+  if ($('#scope').options.length) fillScopes()
   const want = selectId || location.hash.slice(1) || store.get('last', '')
   const id = videos.some((v) => v.id === want) ? want : videos[0]?.id
   if (id) { sel.value = id; if (current?.manifest.id !== id) await openVideo(id) }
@@ -512,6 +534,37 @@ $('#download').addEventListener('change', (e) => {
   if (e.target.value && current) EXPORT ? window.open(`transcript.${e.target.value}`) : (location.href = `/api/videos/${current.manifest.id}/transcript/${e.target.value}`)
   e.target.value = ''
 })
+// Labels: a name, a folder and tags, to find the video and to call it by name from Claude.
+$('#labelsBtn').onclick = () => {
+  if (!current) return
+  const m = current.manifest
+  $('#labelTitle').value = m.processedTitle ? m.title : ''
+  $('#labelTitle').placeholder = m.processedTitle ?? m.title
+  $('#labelFolder').value = m.folder ?? ''
+  $('#labelTags').value = (m.tags ?? []).join(', ')
+  $('#folderList').innerHTML = [...new Set(videos.flatMap((v) => (v.folder ? [v.folder] : [])))].sort().map((f) => `<option value="${esc(f)}">`).join('')
+  const used = [...new Set(videos.flatMap((v) => v.tags ?? []))].sort((a, b) => a.localeCompare(b))
+  $('#tagChoices').innerHTML = used.map((t) => `<button type="button" class="btn small" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')
+  $('#labelsErr').textContent = ''
+  $('#labelsDialog').showModal()
+}
+$('#tagChoices').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tag]'); if (!b) return
+  const tags = $('#labelTags').value.split(',').map((t) => t.trim()).filter(Boolean)
+  if (!tags.some((t) => t.toLowerCase() === b.dataset.tag.toLowerCase())) $('#labelTags').value = [...tags, b.dataset.tag].join(', ')
+})
+$('#cancelLabels').onclick = () => $('#labelsDialog').close()
+$('#saveLabels').onclick = async () => {
+  const id = current.manifest.id
+  const res = await api(`/api/videos/${id}/labels`, { method: 'PUT', body: JSON.stringify({ title: $('#labelTitle').value, folder: $('#labelFolder').value, tags: $('#labelTags').value.split(',') }) })
+  const body = await res.json()
+  if (!res.ok) { $('#labelsErr').textContent = body.error; return }
+  $('#labelsDialog').close()
+  if (current?.manifest.id === id) { current.manifest = { ...current.manifest, ...body.manifest }; document.title = `${current.manifest.title} — video-context` }
+  await loadList(id)
+  toast(`Saved: ${body.manifest.title}${body.manifest.folder ? ` in ${body.manifest.folder}` : ''}`)
+}
+
 // The dialog, filled with the open video as it was processed: one click, or another model.
 $('#reprocessBtn').onclick = () => {
   if (!current) return
@@ -796,13 +849,26 @@ $('#exportMd').onclick = () => {
 }
 
 // ---------- chat ----------
+// The chat's scope: this video, all of them, or a folder ("folder:Posgrado").
 const scope = () => $('#scope').value
-const chatKey = () => (scope() === 'library' ? 'chat:*' : `chat:${current.manifest.id}`)
+const isLibrary = () => scope() !== 'video'
+const scopeFolder = () => (scope().startsWith('folder:') ? scope().slice(7) : undefined)
+const chatKey = () => (scope() === 'video' ? `chat:${current.manifest.id}` : scope() === 'library' ? 'chat:*' : `chat:${scope()}`)
+// The scope list: the folders in use (and their parents) after this video and all videos.
+function fillScopes() {
+  // The scope saved last time, until the list has been filled once (it needs the videos' folders).
+  const sel = $('#scope'), was = videos.length && sel.dataset.filled ? sel.value : store.get('scope', 'video')
+  if (videos.length) sel.dataset.filled = '1'
+  const folders = [...new Set(videos.flatMap((v) => (v.folder ? v.folder.split('/').map((_, i, a) => a.slice(0, i + 1).join('/')) : [])))].sort()
+  sel.innerHTML = '<option value="video">About this video</option><option value="library">About all my videos</option>' +
+    folders.map((f) => `<option value="folder:${esc(f)}">About the folder ${esc(f)}</option>`).join('')
+  sel.value = [...sel.options].some((o) => o.value === was) ? was : 'video'
+}
 function loadChat() { chat = store.get(chatKey(), { sessionId: null, messages: [] }); renderChat(); renderSuggestions() }
 $('#scope').addEventListener('change', () => {
   if (abort) abort.abort()
   store.set('scope', scope())
-  $('#question').placeholder = scope() === 'library' ? 'Ask about all your videos… (Enter to send)' : 'Ask about this video… (Enter to send)'
+  $('#question').placeholder = scope() === 'video' ? 'Ask about this video… (Enter to send)' : scopeFolder() ? `Ask about the videos in ${scopeFolder()}… (Enter to send)` : 'Ask about all your videos… (Enter to send)'
   loadChat()
 })
 
@@ -899,15 +965,15 @@ function messageHtml(m, i) {
 }
 function renderChat() {
   const box = $('#messages')
-  const intro = scope() === 'library'
-    ? 'Ask across every processed video: "in which meeting did they decide the deadline?". Answers link to the video and the moment.'
+  const intro = isLibrary()
+    ? `Ask across ${scopeFolder() ? `the videos in ${esc(scopeFolder())}` : 'every processed video'}: "in which meeting did they decide the deadline?". Answers link to the video and the moment.`
     : 'Ask anything about this video. Claude reads the transcript, searches it, and can look at the screen. Times in answers are links.'
   box.innerHTML = chat.messages.length ? chat.messages.map((m, i) => `<div class="msg ${m.role}">${messageHtml(m, i)}</div>`).join('') : `<p class="placeholder muted">${intro}</p>`
   $('#chatBody').scrollTop = $('#chatBody').scrollHeight
 }
 function renderSuggestions() {
   const now = () => fmt(player.currentTime || 0)
-  const items = scope() === 'library'
+  const items = isLibrary()
     ? [['What is each video about?', () => 'What is each video about? One or two lines each.'], ['Where do they talk about…', () => null]]
     : [
       ['Summary', () => 'Summarize this video in a few bullet points, with the time of each.'],
@@ -942,7 +1008,7 @@ $('#messages').addEventListener('click', (e) => {
 
 async function ask(question) {
   if (!current || !question.trim() || abort) return
-  const library = scope() === 'library'
+  const library = isLibrary()
   const key = chatKey(), conv = chat
   conv.messages.push({ role: 'user', text: question })
   const msg = { role: 'assistant', text: '', tools: [], frames: [], videoId: current.manifest.id }
@@ -955,7 +1021,7 @@ async function ask(question) {
   const started = Date.now(), model = $('#model').value
   const repaint = () => { if (conv !== chat) return; el.innerHTML = messageHtml(msg); const box = $('#chatBody'); if (box.scrollHeight - box.scrollTop - box.clientHeight < 120) box.scrollTop = box.scrollHeight }
   try {
-    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ scope: library ? 'library' : 'video', videoId: current.manifest.id, question, model, sessionId: conv.sessionId }), signal: abort.signal })
+    const res = await api('/api/chat', { method: 'POST', body: JSON.stringify({ scope: library ? 'library' : 'video', folder: scopeFolder(), videoId: current.manifest.id, question, model, sessionId: conv.sessionId }), signal: abort.signal })
     if (!res.ok) throw new Error((await res.json()).error)
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '', paint = 0
     for (;;) {
@@ -1307,12 +1373,13 @@ $('#logsClear').onclick = async () => { await api('/api/logs', { method: 'DELETE
     await loadList()
     return
   }
-  $('#scope').value = store.get('scope', 'video')
+  fillScopes()
   showTab(store.get('tab', 'chat'))
   $('#logFile').textContent = config.logFile ? `Also saved in ${config.logFile}` : ''
   watchLogs()
   await loadList()
-  if (scope() === 'library') $('#scope').dispatchEvent(new Event('change'))
+  fillScopes()
+  if (isLibrary()) $('#scope').dispatchEvent(new Event('change'))
   watchJobs()
 })()
 window.addEventListener('hashchange', () => { const id = location.hash.slice(1); if (id && id !== current?.manifest.id) openVideo(id) })

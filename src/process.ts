@@ -13,6 +13,7 @@ import { dhash, keepDistinct } from './dedupe.js'
 import { parseShowinfoTimes, selectExpression, type Frame } from './frames.js'
 import { findTesseract, mapLimit, ocrImage, ocrLanguages, tesseractLanguages } from './ocr.js'
 import { assignSpeakers, readRecording, speakerNames } from './recording.js'
+import { readLabels } from './labels.js'
 import { makePlayable } from './playable.js'
 import { parseMlxJson, parseWhisperJson, toMarkdown, toSrt, type Segment } from './transcript.js'
 
@@ -66,6 +67,14 @@ export interface Manifest {
   recording?: { url?: string; startedAt?: string; speakers: string[] }
   /** A seekable copy in the video's folder, when the source has no duration nor index (a browser's recording). */
   playable?: string
+  /**
+   * From labels.json, read with the manifest (never stored in manifest.json): the folder
+   * and tags the user filed it under. With a name of theirs, `title` is that name and
+   * `processedTitle` the one processing found.
+   */
+  folder?: string
+  tags?: string[]
+  processedTitle?: string
   /** Imported from an export of another machine instead of processed here. */
   importedFrom?: { id: string; exportedAt?: string; originalName?: string }
 }
@@ -93,6 +102,11 @@ export function loadVideo(id: string): { dir: string; manifest: Manifest; segmen
   try {
     const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as Manifest
     const segments = JSON.parse(readFileSync(join(dir, 'transcript.json'), 'utf8')) as Segment[]
+    // What the user named and filed it as, over what processing found.
+    const labels = readLabels(dir)
+    if (labels.title && labels.title !== manifest.title) Object.assign(manifest, { processedTitle: manifest.title, title: labels.title })
+    if (labels.folder) manifest.folder = labels.folder
+    if (labels.tags.length) manifest.tags = labels.tags
     return { dir, manifest, segments }
   } catch {
     return null
