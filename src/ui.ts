@@ -37,13 +37,19 @@ Options:
       --open      Open the page in the browser
   -h, --help      Show this help`
 
-const { values } = parseArgs({
-  options: {
-    port: { type: 'string', short: 'p' },
-    open: { type: 'boolean' },
-    help: { type: 'boolean', short: 'h' }
-  }
-})
+const OPTIONS = {
+  port: { type: 'string', short: 'p' },
+  open: { type: 'boolean' },
+  help: { type: 'boolean', short: 'h' }
+} as const
+let values: ReturnType<typeof parseArgs<{ options: typeof OPTIONS }>>['values']
+try {
+  values = parseArgs({ options: OPTIONS }).values
+} catch (error) {
+  // Node's message goes on about "--" for positionals: its first sentence says it.
+  console.error(`${String((error as Error).message).split('. ')[0]}.\n\n${USAGE}`)
+  process.exit(1)
+}
 if (values.help) {
   console.log(USAGE)
   process.exit(0)

@@ -67,7 +67,7 @@ describe.skipIf(!ready)('end to end', () => {
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
       const tools = await call('tools/list', {})
       expect(tools.result?.tools?.map((t) => t.name).sort()).toEqual(
-        ['get_frames', 'get_transcript', 'list_frames', 'list_videos', 'process_video', 'search_transcript', 'video_status'].sort()
+        ['get_frames', 'get_screen', 'get_transcript', 'label_video', 'list_frames', 'list_videos', 'process_video', 'search_transcript', 'search_videos', 'video_status'].sort()
       )
       const started = await call('tools/call', { name: 'process_video', arguments: { path: video, language: 'en' } })
       const id = /video ([0-9a-f]{16})/.exec(started.result!.content[0].text!)![1]

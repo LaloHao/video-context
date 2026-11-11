@@ -215,6 +215,10 @@ drop the video and its `.json` together.
   processes one (`playable.webm` in its folder, no re-encoding), and the page, clips and
   exports use it; the original file is not changed. A video processed before this gets its
   copy the first time it is opened in the page.
+- **`Unknown option '--open'`** or **`video-context-ui does not exist`** (0.4.0 and earlier) —
+  `npx @lalohao/video-context video-context-ui` without `-p` runs the main command with
+  `video-context-ui` as the video. Use `npx -p @lalohao/video-context video-context-ui --open`;
+  0.4.1 and later also take `npx @lalohao/video-context ui --open` (and `… mcp`).
 - **`sh: video-context-ui: not found`** (or `video-context`, `video-context-mcp`) — `npx -p
   @lalohao/video-context …` was run inside a clone of this repository: npx takes the folder's
   own package for the published one, and its commands are not installed there. Run it from
